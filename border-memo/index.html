@@ -3,365 +3,543 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=PT+Sans:ital,wght@0,400;0,700;1,400&family=PT+Sans+Narrow:wght@700&family=PT+Mono&display=swap">
 <style>
-/* Layout: one phone column, sticky chip nav, each section a numbered chapter */
+/* Layout: one phone column of schemes. Trees use connector lines, flows use arrow steps, decisions use branch cards. */
 :root{
-  --bg:#f1f3ef; --surface:#ffffff; --fg:#18201a; --muted:#56635a; --line:#d3dacf;
-  --green:#1d5638; --green-soft:#e2ede5; --on-green:#ffffff;
-  --red:#a3281c; --red-soft:#f8e5e2;
-  --amber-soft:#fbf1d5; --amber-fg:#6a4b00;
+  --bg:#eef1ec; --surface:#ffffff; --fg:#17201a; --muted:#56635a; --line:#c9d2c5;
+  --green:#1d5638; --green-soft:#dfebe2; --on-green:#ffffff;
+  --red:#a3281c; --red-soft:#f7e3df;
+  --blue:#24507a; --blue-soft:#e1eaf3;
+  --amber:#7a5600; --amber-soft:#f8eecf;
   --f-display:"PT Sans Narrow","Arial Narrow",system-ui,sans-serif;
   --f-body:"PT Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
   --f-mono:"PT Mono",ui-monospace,Menlo,Consolas,monospace;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#0f1411; --surface:#182019; --fg:#e3eae4; --muted:#98a69c; --line:#2b372f;
-  --green:#77c495; --green-soft:#1d2e23; --on-green:#0b1610;
-  --red:#f08b7d; --red-soft:#341b18;
-  --amber-soft:#2c2412; --amber-fg:#efd18a; color-scheme:dark}}
+  --bg:#0e1310; --surface:#172019; --fg:#e2e9e3; --muted:#97a59b; --line:#2f3c33;
+  --green:#79c597; --green-soft:#1b2c21; --on-green:#0b1610;
+  --red:#f08b7d; --red-soft:#331a17;
+  --blue:#8db8e3; --blue-soft:#17222e;
+  --amber:#ebcb7e; --amber-soft:#2b2311; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#0f1411; --surface:#182019; --fg:#e3eae4; --muted:#98a69c; --line:#2b372f;
-  --green:#77c495; --green-soft:#1d2e23; --on-green:#0b1610;
-  --red:#f08b7d; --red-soft:#341b18;
-  --amber-soft:#2c2412; --amber-fg:#efd18a; color-scheme:dark}
+  --bg:#0e1310; --surface:#172019; --fg:#e2e9e3; --muted:#97a59b; --line:#2f3c33;
+  --green:#79c597; --green-soft:#1b2c21; --on-green:#0b1610;
+  --red:#f08b7d; --red-soft:#331a17;
+  --blue:#8db8e3; --blue-soft:#17222e;
+  --amber:#ebcb7e; --amber-soft:#2b2311; color-scheme:dark}
 
-html{scroll-behavior:smooth;scroll-padding-top:calc(env(safe-area-inset-top,0px) + 64px)}
+html{scroll-behavior:smooth;scroll-padding-top:calc(env(safe-area-inset-top,0px) + 62px)}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-body{background:var(--bg);color:var(--fg);font:16px/1.55 var(--f-body)}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 var(--f-body)}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--bg)}
-.wrap{max-width:660px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:680px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
 
-header .wrap{padding-block:22px 18px}
-.eyebrow{font:12px/1.4 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
-h1{font:700 36px/1 var(--f-display);margin:8px 0 10px;color:var(--green);letter-spacing:.01em;text-wrap:balance}
-.lead{margin:0;color:var(--muted);font-size:15px}
+header .wrap{padding-block:22px 16px}
+.eyebrow{font:11px/1.5 var(--f-mono);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+h1{font:700 34px/1 var(--f-display);margin:8px 0 8px;color:var(--green);letter-spacing:.01em}
+.lead{margin:0;color:var(--muted);font-size:14px}
 
 nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
-nav .wrap{display:flex;gap:6px;overflow-x:auto;padding-block:10px;scrollbar-width:none}
+nav .wrap{display:flex;gap:6px;overflow-x:auto;padding-block:9px;scrollbar-width:none}
 nav .wrap::-webkit-scrollbar{display:none}
-nav a{flex:none;font:700 14px/1 var(--f-body);color:var(--fg);text-decoration:none;padding:9px 12px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
-nav a:focus-visible,a:focus-visible{outline:2px solid var(--green);outline-offset:2px}
+nav a{flex:none;font:700 13px/1 var(--f-body);color:var(--fg);text-decoration:none;padding:9px 11px;border:1px solid var(--line);border-radius:999px;background:var(--surface)}
+a:focus-visible{outline:2px solid var(--green);outline-offset:2px}
 
-main .wrap{padding-block:8px 48px}
-section{padding-block:22px 6px;border-bottom:1px solid var(--line)}
+main .wrap{padding-block:6px 40px}
+section{padding-block:24px 8px;border-bottom:1px solid var(--line)}
 section:last-of-type{border-bottom:0}
-.sec-head{display:flex;gap:12px;align-items:baseline;margin-bottom:10px}
-.sec-head .no{font:700 14px var(--f-mono);color:var(--green)}
-h2{font:700 26px/1.1 var(--f-display);margin:0;letter-spacing:.01em;text-wrap:balance}
-h3{font:700 16px/1.3 var(--f-body);margin:20px 0 6px}
+.sec-head{display:flex;gap:10px;align-items:baseline;margin-bottom:12px}
+.sec-head .no{font:700 13px var(--f-mono);color:var(--green)}
+h2{font:700 24px/1.12 var(--f-display);margin:0;letter-spacing:.01em;text-wrap:balance}
+h3{font:700 12px/1.3 var(--f-mono);text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:22px 0 8px}
 p{margin:8px 0}
-ul,ol{margin:6px 0;padding-left:20px}
-li{margin:5px 0}
-.src{font:12px/1.4 var(--f-mono);color:var(--muted);white-space:nowrap}
+.src{font:11px/1.4 var(--f-mono);color:var(--muted)}
+b{font-weight:700}
 
-.def{background:var(--green-soft);border-radius:10px;padding:14px 16px;margin:10px 0}
-.def .k{font:12px var(--f-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--green)}
-.def p{margin:6px 0 0;font-size:17px}
-.def em{font-style:normal;font-weight:700}
+/* --- definition box --- */
+.def{border:2px solid var(--green);border-radius:10px;background:var(--surface);overflow:hidden}
+.def .k{background:var(--green);color:var(--on-green);font:700 12px var(--f-mono);letter-spacing:.05em;text-transform:uppercase;padding:7px 12px}
+.def p{margin:0;padding:12px 14px;font-size:16px;line-height:1.5}
 
-.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
-.card h3{margin-top:0}
+/* --- generic node --- */
+.node{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:9px 11px}
+.node.root{background:var(--green);border-color:var(--green);color:var(--on-green);font-weight:700;text-align:center}
+.node.blue{background:var(--blue-soft);border-color:transparent}
+.node.green{background:var(--green-soft);border-color:transparent}
+.node.red{background:var(--red-soft);border-color:transparent}
+.node.amber{background:var(--amber-soft);border-color:transparent}
+.node .t{font-weight:700;display:block}
+.node small{display:block;color:var(--muted);font-size:13px;margin-top:2px}
+.node.root small{color:inherit;opacity:.85}
 
+/* --- tree: root + children with connector lines --- */
+.tree{margin:10px 0}
+.tree>.node.root{position:relative}
+.tree ul{list-style:none;margin:0;padding:0 0 0 22px;position:relative}
+.tree ul::before{content:"";position:absolute;left:10px;top:0;bottom:22px;border-left:2px solid var(--line)}
+.tree li{position:relative;padding-top:8px}
+.tree li::before{content:"";position:absolute;left:-12px;top:28px;width:12px;border-top:2px solid var(--line)}
+.tree li>.node{position:relative}
+.tree ul ul{padding-left:20px}
+.tree ul ul::before{left:8px}
+
+/* --- grid of equal nodes --- */
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:10px 0}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+@media (max-width:520px){.grid3{grid-template-columns:1fr}}
+@media (max-width:360px){.grid2{grid-template-columns:1fr}}
+
+/* --- flow: steps with arrows --- */
+.flow{display:flex;flex-direction:column;align-items:stretch;margin:10px 0}
+.flow>.node{position:relative}
+.flow>.arrow{align-self:center;width:2px;height:18px;background:var(--muted);position:relative;margin-bottom:6px}
+.flow>.arrow::after{content:"";position:absolute;left:-5px;bottom:-6px;border:6px solid transparent;border-top:7px solid var(--muted);border-bottom:0}
+.step{display:grid;grid-template-columns:28px 1fr;gap:8px;align-items:start}
+.step .n{font:700 12px/24px var(--f-mono);text-align:center;width:24px;height:24px;border-radius:50%;background:var(--green);color:var(--on-green)}
+.step>div{min-width:0}
+
+/* --- decision tree --- */
+.q{background:var(--blue);color:var(--surface);border-radius:8px;padding:9px 12px;font-weight:700}
+:root .q{color:#fff}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .q{color:#0c1620}}
+:root[data-theme="dark"] .q{color:#0c1620}
+.branches{display:grid;gap:8px;margin:8px 0 0 12px;padding-left:14px;border-left:2px solid var(--blue)}
+.br{position:relative}
+.br::before{content:"";position:absolute;left:-14px;top:18px;width:12px;border-top:2px solid var(--blue)}
+.lbl{display:inline-block;font:700 11px/1 var(--f-mono);letter-spacing:.04em;text-transform:uppercase;padding:4px 6px;border-radius:4px;background:var(--blue-soft);color:var(--blue);margin-bottom:5px}
+.res{border-radius:8px;padding:9px 12px;font-weight:700}
+.res.ok{background:var(--green-soft);color:var(--green)}
+.res.pass{background:var(--amber-soft);color:var(--amber)}
+.res small{display:block;font-weight:400;color:var(--fg);font-size:13px;margin-top:2px}
+
+/* --- table --- */
 .tbl{overflow-x:auto;margin:10px 0;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
-table{border-collapse:collapse;width:100%;font-size:14px;min-width:460px}
-th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:480px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
 tr:last-child td{border-bottom:0}
 th{font:700 11px var(--f-mono);text-transform:uppercase;letter-spacing:.05em;color:var(--muted);background:var(--bg)}
-td b{white-space:nowrap}
+td:first-child{font-weight:700}
 
-.list-num{list-style:none;padding:0;counter-reset:n}
-.list-num>li{counter-increment:n;display:grid;grid-template-columns:30px 1fr;gap:6px;margin:8px 0}
-.list-num>li::before{content:counter(n);font:700 13px/24px var(--f-mono);text-align:center;width:24px;height:24px;border-radius:50%;background:var(--green);color:var(--on-green)}
-.list-num>li>*{min-width:0}
+.stop{border:2px solid var(--red);border-radius:10px;overflow:hidden;margin:12px 0;background:var(--surface)}
+.stop .k{background:var(--red);color:var(--surface);font:700 12px var(--f-mono);letter-spacing:.05em;text-transform:uppercase;padding:7px 12px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .stop .k{color:#1a0d0b}}
+:root[data-theme="dark"] .stop .k{color:#1a0d0b}
+.stop ul{margin:0;padding:10px 14px 10px 30px}
+.stop li{margin:4px 0}
 
-.stop{background:var(--red-soft);border-radius:10px;padding:12px 14px;margin:12px 0}
-.stop .k{font:700 12px var(--f-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--red)}
-.stop p{margin:6px 0 0}
+ul.plain{margin:6px 0;padding-left:18px}
+ul.plain li{margin:4px 0}
 
-.v{display:inline-block;font:11px/1 var(--f-mono);padding:3px 5px;border-radius:4px;background:var(--amber-soft);color:var(--amber-fg);vertical-align:1px}
-.chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
-.chips span{font-size:14px;padding:5px 9px;border-radius:6px;background:var(--surface);border:1px solid var(--line)}
-
-footer{font-size:13px;color:var(--muted);padding-block:6px 30px}
+footer{font-size:12.5px;color:var(--muted);padding-block:4px 30px}
 footer p{margin:6px 0}
 footer b{color:var(--fg)}
 </style>
 
 <header><div class="wrap">
-  <div class="eyebrow">Закон РФ № 4730-1 · ФЗ «О ФСБ» · Приказ ФСБ России № 454</div>
+  <div class="eyebrow">Закон РФ от 01.04.1993 № 4730-1 · ФЗ от 03.04.1995 № 40-ФЗ · Приказ ФСБ России от 07.08.2017 № 454</div>
   <h1>Памятка пограничника</h1>
-  <p class="lead">Государственная граница, режимы, полномочия пограничных органов, оружие и спецсредства, въезд в пограничную зону и документы.</p>
+  <p class="lead">Схемы по основным положениям законодательства о Государственной границе Российской Федерации и Правил пограничного режима.</p>
 </div></header>
 
 <nav aria-label="Разделы"><div class="wrap">
-  <a href="#gg">Граница</a>
-  <a href="#rezhim-gg">Режим ГГ</a>
-  <a href="#pogr-rezhim">Погр. режим</a>
-  <a href="#po">Полномочия ПО</a>
-  <a href="#oruzhie">Оружие и СС</a>
-  <a href="#vezd">Въезд в ПЗ</a>
-  <a href="#dokumenty">Документы</a>
+  <a href="#gg">1. ГГ</a>
+  <a href="#rezhimy">2. Режимы</a>
+  <a href="#rezhim-gg">3. Режим ГГ</a>
+  <a href="#pr">4. Погр. режим</a>
+  <a href="#po">5. Полномочия ПО</a>
+  <a href="#oruzhie">6. Оружие и СС</a>
+  <a href="#vezd">7. Въезд в ПЗ</a>
+  <a href="#dok">8. Документы</a>
 </div></nav>
 
 <main><div class="wrap">
 
 <!-- 1 -->
 <section id="gg">
-  <div class="sec-head"><span class="no">01</span><h2>Государственная граница</h2></div>
+  <div class="sec-head"><span class="no">1</span><h2>Государственная граница Российской Федерации</h2></div>
   <div class="def">
-    <div class="k">Понятие · ст. 1 Закона</div>
-    <p>Государственная граница РФ — <em>линия и проходящая по этой линии вертикальная поверхность</em>, определяющие пределы государственной территории (<em>суши, вод, недр и воздушного пространства</em>) Российской Федерации, то есть пространственный предел действия государственного суверенитета РФ.</p>
+    <div class="k">Статья 1 Закона № 4730-1</div>
+    <p>Государственная граница Российской Федерации есть <b>линия и проходящая по этой линии вертикальная поверхность</b>, определяющие пределы государственной территории (<b>суши, вод, недр и воздушного пространства</b>) Российской Федерации, то есть пространственный предел действия государственного суверенитета Российской Федерации.</p>
   </div>
-  <h3>Что из определения надо запомнить</h3>
-  <ul>
-    <li><b>Линия</b> — проходит по земной поверхности (суше и воде).</li>
-    <li><b>Вертикальная поверхность</b> — продолжает линию вверх (воздушное пространство) и вниз (недра).</li>
-    <li>Граница отделяет территорию РФ от территории других государств и от открытого моря.</li>
-  </ul>
-  <h3>Как проходит граница <span class="src">ст. 5</span></h3>
-  <div class="tbl"><table>
-    <thead><tr><th>Где</th><th>Линия границы</th></tr></thead>
-    <tbody>
-      <tr><td><b>Суша</b></td><td>По характерным точкам и линиям рельефа или ясно видимым ориентирам</td></tr>
-      <tr><td><b>Море</b></td><td>По внешней границе территориального моря РФ (12 морских миль от исходных линий)</td></tr>
-      <tr><td><b>Судоходная река</b></td><td>По середине главного фарватера или по тальвегу</td></tr>
-      <tr><td><b>Несудоходная река, ручей</b></td><td>По их середине или по середине главного рукава</td></tr>
-      <tr><td><b>Озеро, водоём</b></td><td>По прямой, соединяющей выходы границы к берегам</td></tr>
-      <tr><td><b>Мост, плотина</b></td><td>По середине сооружения или его технологической оси, независимо от прохождения по воде</td></tr>
-    </tbody>
-  </table></div>
-  <h3>Связанные понятия</h3>
-  <ul>
-    <li><b>Защита ГГ</b> — часть системы обеспечения безопасности РФ; её осуществляют все органы госвласти в пределах полномочий. <span class="src">ст. 2</span></li>
-    <li><b>Охрана ГГ</b> — часть защиты. На суше, море, реках, озёрах и в пунктах пропуска её осуществляют <b>пограничные органы ФСБ России</b>; в воздушном пространстве и подводной среде — Вооружённые Силы. <span class="src">ст. 2, 30</span></li>
-    <li><b>Приграничная территория</b> — пограничная зона, российская часть вод пограничных рек и озёр, внутренние морские воды и территориальное море, пункты пропуска и прилегающие районы. <span class="src">ст. 2</span></li>
-  </ul>
-</section>
 
-<!-- 2 -->
-<section id="rezhim-gg">
-  <div class="sec-head"><span class="no">02</span><h2>Режим Государственной границы</h2></div>
-  <div class="def">
-    <div class="k">Что включает · ст. 7 Закона</div>
-    <p>Режим ГГ — это правила:</p>
-  </div>
-  <ol class="list-num">
-    <li><span>содержания Государственной границы;</span></li>
-    <li><span>пересечения ГГ лицами и транспортными средствами;</span></li>
-    <li><span>перемещения через ГГ товаров и животных;</span></li>
-    <li><span>пропуска через ГГ лиц, транспорта, товаров и животных;</span></li>
-    <li><span>ведения на ГГ или вблизи неё хозяйственной, промысловой и иной деятельности;</span></li>
-    <li><span>разрешения с иностранными государствами инцидентов, связанных с нарушением этих правил.</span></li>
-  </ol>
-  <p>Режим ГГ устанавливается Законом и международными договорами РФ. Отдельные правила по взаимной договорённости со смежным государством могут не устанавливаться. <span class="src">ст. 7</span></p>
-  <h3>Пересечение границы <span class="src">ст. 9, 11</span></h3>
-  <ul>
-    <li>Лица и транспорт пересекают ГГ <b>в пунктах пропуска</b>, при наличии действительных документов на право въезда в РФ или выезда из РФ.</li>
-    <li>Вне пунктов пропуска — только в случаях, прямо предусмотренных законом и международными договорами.</li>
-    <li>Незаконное пересечение — <b>ст. 322 УК РФ</b>; нарушение режима ГГ — <b>ст. 18.1 КоАП</b>.</li>
-  </ul>
-  <h3>Три режима — не путать</h3>
-  <div class="tbl"><table>
-    <thead><tr><th>Режим</th><th>Где действует</th><th>Что регулирует</th></tr></thead>
-    <tbody>
-      <tr><td><b>Режим ГГ</b></td><td>На самой границе и при её пересечении</td><td>Содержание, пересечение, перемещение, пропуск через ГГ</td></tr>
-      <tr><td><b>Пограничный режим</b></td><td>Пограничная зона, российская часть вод пограничных рек, озёр, внутренние морские воды, территориальное море</td><td>Въезд, пребывание, передвижение, деятельность</td></tr>
-      <tr><td><b>Режим в пунктах пропуска</b></td><td>Пункты пропуска через ГГ</td><td>Въезд, пребывание, выезд из ПП лиц и транспорта</td></tr>
-    </tbody>
-  </table></div>
-</section>
-
-<!-- 3 -->
-<section id="pogr-rezhim">
-  <div class="sec-head"><span class="no">03</span><h2>Пограничный режим</h2></div>
-  <div class="def">
-    <div class="k">Назначение · ст. 16 Закона (ред. ФЗ № 604-ФЗ, с 17.06.2024)</div>
-    <p>Пограничный режим устанавливается <em>исключительно в целях создания необходимых условий охраны Государственной границы</em>.</p>
-  </div>
-  <h3>Пограничный режим включает правила</h3>
-  <ul>
-    <li><b>въезда (прохода), временного пребывания, передвижения</b> лиц и транспортных средств в пограничной зоне;</li>
-    <li>ведения <b>хозяйственной, промысловой и иной деятельности</b>, проведения массовых общественно-политических, культурных и других мероприятий в пограничной зоне;</li>
-    <li>ведения промысловой, исследовательской, изыскательской и иной деятельности, <b>пребывания и плавания судов</b> в российской части вод пограничных рек, озёр и иных водных объектов, во внутренних морских водах и территориальном море.</li>
-  </ul>
-  <h3>Пограничная зона</h3>
-  <ul>
-    <li>Устанавливается вдоль сухопутной границы, морского побережья и берегов пограничных рек и озёр.</li>
-    <li><b>Пределы зоны</b> определяет и изменяет ФСБ России (своими приказами по субъектам РФ).</li>
-    <li>На въездах в зону ставятся <b>предупреждающие знаки</b>.</li>
-    <li>Конкретные правила пограничного режима установлены <b>Правилами пограничного режима</b> (приказ ФСБ России от 07.08.2017 № 454). Устанавливать иные правила пограничного режима не допускается.</li>
-  </ul>
-  <p>Нарушение пограничного режима в пограничной зоне — <b>ст. 18.2 КоАП</b>, во внутренних водах и территориальном море — <b>ст. 18.3 КоАП</b>.</p>
-</section>
-
-<!-- 4 -->
-<section id="po">
-  <div class="sec-head"><span class="no">04</span><h2>Полномочия пограничных органов</h2></div>
-  <p>Основа — <b>ст. 30 Закона</b> «Полномочия пограничных органов» и <b>ст. 12, 13 ФЗ «О ФСБ»</b> (обязанности и права органов ФСБ).</p>
-  <h3>Пограничные органы</h3>
-  <ul>
-    <li>охраняют ГГ на суше, море, реках, озёрах и иных водных объектах, в пунктах пропуска; <b>осуществляют пропуск</b> через ГГ лиц, транспорта, грузов, товаров и животных;</li>
-    <li>обеспечивают всеми имеющимися мерами <b>недопущение противоправного изменения прохождения ГГ</b> на местности;</li>
-    <li>контролируют соблюдение режима ГГ, пограничного режима и режима в пунктах пропуска;</li>
-    <li>ведут разведывательную, контрразведывательную и оперативно-розыскную деятельность; производят дознание по делам, отнесённым к их ведению;</li>
-    <li>при угрозе интересам РФ на ГГ <b>временно ограничивают</b> производство работ с уведомлением органов местного самоуправления и организаций (кроме оборонных работ и работ при стихийных бедствиях и особо опасных инфекциях).</li>
-  </ul>
-  <h3>Права, которыми пользуется наряд</h3>
-  <ol class="list-num">
-    <li><span>Требовать от граждан и должностных лиц соблюдения режима ГГ, пограничного режима и режима в пунктах пропуска.</span></li>
-    <li><span><b>Проверять документы</b> на право въезда, пребывания и передвижения в пограничной зоне и пересечения ГГ.</span></li>
-    <li><span>Приглашать лиц в подразделения и <b>получать от них объяснения</b> по обстоятельствам нарушений.</span></li>
-    <li><span><b>Задерживать и доставлять</b> в служебные помещения лиц, нарушивших режимы, а также подозреваемых в преступлениях. Производить <b>личный досмотр</b>, досмотр вещей, транспортных средств, изымать вещи и документы.</span></li>
-    <li><span>Составлять протоколы об административных правонарушениях (гл. 18 КоАП и др.).</span></li>
-    <li><span>Беспрепятственно <b>проникать</b> в жилые и иные помещения, на земельные участки и территории при преследовании нарушителей и в других случаях, указанных в законе, с уведомлением прокурора <span class="src">ст. 14.1 ФЗ «О ФСБ»</span>.</span></li>
-    <li><span>Использовать транспорт и средства связи организаций и граждан для преследования нарушителей и доставки пострадавших в больницу (кроме транспорта дипломатических представительств), с возмещением расходов.</span></li>
-  </ol>
-  <h3>Сроки задержания <span class="src">ст. 27.5 КоАП</span></h3>
-  <div class="chips"><span>Общий срок — до <b>3 ч</b></span><span>Нарушение режима ГГ, погранрежима, режима в ПП — до <b>48 ч</b></span></div>
-  <p>Срок считается с момента доставления. Задержанному разъясняют права (ст. 25.1 КоАП, ст. 51 Конституции). Об иностранце уведомляют консульство по его просьбе.</p>
-</section>
-
-<!-- 5 -->
-<section id="oruzhie">
-  <div class="sec-head"><span class="no">05</span><h2>Применение оружия и специальных средств</h2></div>
-  <p>Пограничники, участвующие в защите ГГ в пределах приграничной территории, применяют боевую технику, оружие, специальные средства и физическую силу <b>по Закону № 4730-1</b> (ст. 35, 36). В остальном действуют <b>ст. 14.2, 14.3, 14.5 ФЗ «О ФСБ»</b>. Порядок применения оружия и боевой техники при охране ГГ определён <b>постановлением Правительства РФ от 24.02.2010 № 80</b>.</p>
-
-  <h3>Оружие и боевая техника применяются <span class="src">ст. 35 Закона</span></h3>
-  <ul>
-    <li>для <b>отражения вооружённого нападения, вторжения</b> на территорию РФ;</li>
-    <li>для пресечения <b>вооружённых провокаций</b> на ГГ;</li>
-    <li>для отражения нападения на подразделения и объекты пограничных органов, ВС РФ и других органов, участвующих в защите ГГ;</li>
-    <li>для оказания помощи кораблям, самолётам и вертолётам при отражении вооружённого нападения на них;</li>
-    <li>против нарушителей ГГ и судов, нарушающих режим, когда они не выполняют законных требований и пресечь нарушение иными средствами нельзя — в порядке, определённом Правительством РФ.</li>
-  </ul>
-
-  <h3>Оружие лично или в составе группы <span class="src">ст. 14.3 ФЗ «О ФСБ»</span></h3>
-  <ul>
-    <li>защита себя или другого лица от посягательства, опасного для жизни и здоровья;</li>
-    <li>пресечение попытки завладеть оружием, боевой и специальной техникой;</li>
-    <li>отражение нападения на здания, объекты, транспорт органов ФСБ;</li>
-    <li>освобождение заложников;</li>
-    <li><b>задержание лица, оказывающего вооружённое сопротивление</b>, застигнутого при совершении тяжкого или особо тяжкого преступления, а также пытающегося скрыться;</li>
-    <li>пресечение побега из-под стражи;</li>
-    <li>остановка транспортного средства, водитель которого создаёт угрозу жизни и здоровью и не выполняет требования остановиться.</li>
-  </ul>
-
-  <h3>Специальные средства <span class="src">ст. 36 Закона · ст. 14.5 ФЗ «О ФСБ»</span></h3>
-  <ul>
-    <li>Применяются <b>во всех случаях, когда разрешено применение оружия</b>.</li>
-    <li>Кроме того — для отражения нападения на граждан и военнослужащих, пресечения правонарушений, преодоления противодействия законным требованиям, задержания и доставления нарушителей, если они оказывают сопротивление, остановки транспорта, освобождения захваченных зданий и транспорта.</li>
-    <li>Виды и порядок — правила применения специальных средств пограничными органами, утверждённые Правительством РФ.</li>
-  </ul>
-
-  <h3>Порядок применения <span class="src">ст. 35 Закона · ст. 14.2 ФЗ «О ФСБ»</span></h3>
-  <ol class="list-num">
-    <li><span><b>Предупредить</b>: назвать свою принадлежность к органам ФСБ и ясно выразить намерение применить оружие, СС или силу; дать время выполнить требования.</span></li>
-    <li><span>Перед оружием — <b>предупредительные выстрелы</b> (сигналы).</span></li>
-    <li><span>Без предупреждения — только когда промедление создаёт непосредственную опасность жизни и здоровью или может повлечь иные тяжкие последствия.</span></li>
-    <li><span>Действовать <b>с учётом обстановки</b>, характера и степени опасности, стремиться к <b>наименьшему ущербу</b>.</span></li>
-    <li><span>Обеспечить пострадавшим <b>первую помощь</b>.</span></li>
-    <li><span><b>Доложить</b> командиру о каждом применении; при ранении или гибели человека — уведомить прокурора.</span></li>
-  </ol>
-
-  <div class="stop">
-    <div class="k">Запрещено</div>
-    <p>Применять оружие в отношении <b>женщин, лиц с явными признаками инвалидности, несовершеннолетних</b> (когда возраст очевиден или известен), кроме случаев вооружённого сопротивления, вооружённого или группового нападения с их стороны.</p>
-    <p>Применять огнестрельное оружие <b>при значительном скоплении людей</b>, если могут пострадать посторонние (кроме борьбы с терроризмом, освобождения заложников, отражения группового нападения на важные объекты).</p>
-  </div>
-  <p>Военнослужащий не несёт ответственности за вред, причинённый при применении оружия, СС и силы по основаниям и в порядке, установленным законом. <span class="src">ст. 14 ФЗ «О ФСБ»</span></p>
-</section>
-
-<!-- 6 -->
-<section id="vezd">
-  <div class="sec-head"><span class="no">06</span><h2>Въезд, пребывание и выезд из пограничной зоны</h2></div>
-  <p class="src">Правила пограничного режима, приказ ФСБ России от 07.08.2017 № 454 (ред. от 25.05.2024)</p>
-
-  <h3>Где въезжать <span class="src">п. 1</span></h3>
-  <p>Граждане РФ, иностранцы и лица без гражданства въезжают (проходят) в пограничную зону <b>только в местах въезда (прохода)</b>, установленных на путях сообщения и обозначенных <b>предупреждающими знаками</b> (образец — приложение № 1 к Правилам).</p>
-
-  <h3>Въезд по одному документу, удостоверяющему личность <span class="src">п. 2</span></h3>
-  <ul>
-    <li><b>«а»</b> — граждане РФ, следующие в пограничную зону <b>до пятикилометровой полосы</b> местности вдоль ГГ на суше (до рубежа инженерно-технических сооружений);</li>
-    <li><b>«в»</b> — граждане, имеющие при себе <b>один из документов приложения № 2</b> (см. раздел «Документы»);</li>
-    <li><b>«г»</b> — граждане РФ и Республики Беларусь, следующие в пограничную зону вдоль <b>российско-белорусского</b> участка ГГ;</li>
-    <li>отдельные категории (в т. ч. по Калининградской области) — по подпунктам п. 2.</li>
-  </ul>
-
-  <h3>Въезд по документу и пропуску</h3>
-  <p>Всем остальным — <b>документ, удостоверяющий личность + пропуск</b>. Это прежде всего:</p>
-  <ul>
-    <li>граждане РФ, следующие <b>в пятикилометровую полосу</b> вдоль ГГ или за рубеж ИТС без документа из приложения № 2;</li>
-    <li><b>иностранные граждане и лица без гражданства</b>.</li>
-  </ul>
-  <div class="card">
-    <h3>Пропуска</h3>
+  <h3>Схема 1.1. Структура понятия</h3>
+  <div class="tree">
+    <div class="node root">Государственная граница РФ</div>
     <ul>
-      <li><b>Индивидуальный</b> — на одного человека (и его транспорт); <b>коллективный</b> — на группу по списку.</li>
-      <li>Выдаёт пограничный орган (пограничное управление, отдел, отделение) по заявлению — лично или через Госуслуги. Порядок — <b>приказ ФСБ России от 28.02.2023 № 102</b>.</li>
-      <li>Пропуск действует <b>только вместе с документом, удостоверяющим личность</b>, в указанных в нём районе и сроке.</li>
-      <li>Нужно остаться дольше срока — получить новый пропуск.</li>
+      <li><div class="node blue"><span class="t">Линия</span><small>проходит по земной (водной) поверхности</small></div></li>
+      <li><div class="node blue"><span class="t">Вертикальная поверхность</span><small>проходит по линии вверх и вниз</small></div>
+        <ul>
+          <li><div class="node"><span class="t">Пределы государственной территории</span></div>
+            <ul>
+              <li><div class="node green">Суша</div></li>
+              <li><div class="node green">Воды</div></li>
+              <li><div class="node green">Недра</div></li>
+              <li><div class="node green">Воздушное пространство</div></li>
+            </ul>
+          </li>
+        </ul>
+      </li>
+      <li><div class="node amber"><span class="t">Пространственный предел действия государственного суверенитета РФ</span></div></li>
     </ul>
   </div>
 
-  <h3>Пребывание и передвижение</h3>
-  <ul>
-    <li>Находясь в зоне, иметь при себе <b>документы, по которым осуществлён въезд</b>, и предъявлять их по требованию пограничного наряда.</li>
-    <li>Передвигаться только в районе и в сроки, указанные в пропуске (разрешении).</li>
-    <li>Хозяйственная, промысловая и иная деятельность, массовые мероприятия, выпас скота — <b>по разрешению или с уведомлением</b> пограничного органа, в установленных местах и сроках. Разрешения выдаются по приказу № 102.</li>
-    <li>Портить, переносить предупреждающие знаки и инженерные сооружения запрещено.</li>
-  </ul>
-
-  <h3>Выезд</h3>
-  <ul>
-    <li>Выезжать (выходить) — через места въезда (прохода), обозначенные предупреждающими знаками.</li>
-    <li>Лица, въехавшие по пропуску, выезжают <b>до окончания срока</b> его действия.</li>
-    <li>Пребывание после окончания срока или вне указанного района — нарушение пограничного режима (ст. 18.2 КоАП).</li>
-  </ul>
-
-  <h3>Проверка нарядом — по шагам</h3>
-  <ol class="list-num">
-    <li><span>Представиться, назвать причину обращения.</span></li>
-    <li><span>Потребовать документ, удостоверяющий личность, и основание въезда: пропуск или документ из приложения № 2.</span></li>
-    <li><span>Сверить фото и данные, срок действия, район, маршрут, транспорт.</span></li>
-    <li><span>Нарушения нет — вернуть документы. Нарушение есть — разъяснить права, составить протокол или доставить в подразделение.</span></li>
-    <li><span>Доложить старшему наряда.</span></li>
-  </ol>
-</section>
-
-<!-- 7 -->
-<section id="dokumenty">
-  <div class="sec-head"><span class="no">07</span><h2>Необходимые документы</h2></div>
+  <h3>Схема 1.2. Прохождение Государственной границы <span class="src">ст. 5</span></h3>
   <div class="tbl"><table>
-    <thead><tr><th>Кто и куда</th><th>Что предъявить</th><th>Основание</th></tr></thead>
+    <thead><tr><th>Участок</th><th>Линия Государственной границы</th></tr></thead>
     <tbody>
-      <tr><td>Гражданин РФ — в ПЗ до 5-км полосы</td><td>Документ, удостоверяющий личность</td><td>п. 2 «а»</td></tr>
-      <tr><td>Гражданин РФ — в 5-км полосу / за рубеж ИТС</td><td>Документ, удостоверяющий личность + пропуск <i>или</i> документ из прил. № 2</td><td>п. 2 «в», прил. 2</td></tr>
-      <tr><td>Граждане РФ и Беларуси — российско-белорусский участок</td><td>Документ, удостоверяющий личность</td><td>п. 2 «г»</td></tr>
-      <tr><td>Иностранец, лицо без гражданства</td><td>Документ, удостоверяющий личность и признаваемый в РФ, + пропуск</td><td>Правила № 454</td></tr>
-      <tr><td>Водитель транспорта</td><td>Свои документы + документы на ТС (на ТС также оформляется пропуск, если он нужен)</td><td>Правила № 454</td></tr>
+      <tr><td>Суша</td><td>По характерным точкам, линиям рельефа или ясно видимым ориентирам</td></tr>
+      <tr><td>Море</td><td>По внешней границе территориального моря РФ</td></tr>
+      <tr><td>Судоходная река</td><td>По середине главного фарватера или по тальвегу реки</td></tr>
+      <tr><td>Несудоходная река, ручей</td><td>По их середине или по середине главного рукава реки</td></tr>
+      <tr><td>Озеро, иной водоём</td><td>По прямой линии, соединяющей выходы ГГ к берегам</td></tr>
+      <tr><td>Мост, плотина</td><td>По середине сооружения или по его технологической оси независимо от прохождения ГГ на воде</td></tr>
     </tbody>
   </table></div>
 
-  <h3>Документ, удостоверяющий личность гражданина РФ</h3>
-  <div class="chips"><span>Паспорт гражданина РФ</span><span>Свидетельство о рождении (до 14 лет)</span><span>Военный билет / удостоверение личности военнослужащего</span><span>Временное удостоверение личности</span></div>
+  <h3>Схема 1.3. Защита и охрана Государственной границы <span class="src">ст. 2</span></h3>
+  <div class="tree">
+    <div class="node root">Защита Государственной границы<small>составная часть системы обеспечения безопасности РФ; осуществляется органами государственной власти в пределах их полномочий</small></div>
+    <ul>
+      <li><div class="node blue"><span class="t">Охрана Государственной границы</span><small>составная часть защиты ГГ</small></div>
+        <ul>
+          <li><div class="node green"><span class="t">Пограничные органы ФСБ России</span><small>в пределах приграничной территории: на суше, море, реках, озёрах и иных водных объектах, в пунктах пропуска</small></div></li>
+          <li><div class="node green"><span class="t">Войска ПВО и силы ВМФ Вооружённых Сил РФ</span><small>в воздушном пространстве и подводной среде</small></div></li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+</section>
 
-  <h3>Приложение № 2: при каких документах достаточно удостоверения личности</h3>
-  <p>Если у гражданина при себе есть один из этих документов, пропуск ему не нужен:</p>
-  <ul>
-    <li><b>регистрация по месту жительства</b> в муниципальном районе (городском округе), где установлена пограничная зона; для 5-км полосы — в том числе <b>у близких родственников</b>, проживающих там;</li>
-    <li>документ, подтверждающий <b>служебное (должностное) положение</b> — для следующих по службе;</li>
-    <li><b>путевой лист</b> — для передвижения по служебным обязанностям;</li>
-    <li>документ образовательной организации — о <b>практике или стажировке</b>;</li>
-    <li><b>направление на лечение</b> или путёвка на санаторно-курортное лечение;</li>
-    <li><b>договор о реализации туристского продукта</b>;</li>
-    <li><b>разрешение пограничного органа</b> на хозяйственную, промысловую и иную деятельность в зоне;</li>
-    <li><b>справка</b> для въезда в пограничную зону, выданная <b>не ранее чем за 6 месяцев</b> до её предъявления.</li>
-  </ul>
-  <p>Полный перечень и условия каждого пункта — в приложении № 2 к Правилам.</p>
+<!-- 2 -->
+<section id="rezhimy">
+  <div class="sec-head"><span class="no">2</span><h2>Правовые режимы на Государственной границе</h2></div>
+  <h3>Схема 2.1. Виды режимов</h3>
+  <div class="tree">
+    <div class="node root">Режимы, установленные Законом № 4730-1</div>
+    <ul>
+      <li><div class="node blue"><span class="t">Режим Государственной границы</span><small>ст. 7 · на ГГ и при её пересечении</small></div></li>
+      <li><div class="node blue"><span class="t">Пограничный режим</span><small>ст. 16 · в пограничной зоне, российской части вод пограничных рек и озёр, внутренних морских водах и территориальном море</small></div></li>
+      <li><div class="node blue"><span class="t">Режим в пунктах пропуска через ГГ</span><small>ст. 20 · в пунктах пропуска</small></div></li>
+    </ul>
+  </div>
+  <h3>Схема 2.2. Ответственность за нарушение</h3>
+  <div class="grid3">
+    <div class="node"><span class="t">Режим ГГ</span><small>ст. 18.1 КоАП РФ<br>ст. 322 УК РФ — незаконное пересечение ГГ</small></div>
+    <div class="node"><span class="t">Пограничный режим</span><small>ст. 18.2 КоАП РФ — в пограничной зоне<br>ст. 18.3 КоАП РФ — во внутренних водах и территориальном море</small></div>
+    <div class="node"><span class="t">Режим в ПП</span><small>ст. 18.4 КоАП РФ</small></div>
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="rezhim-gg">
+  <div class="sec-head"><span class="no">3</span><h2>Режим Государственной границы</h2></div>
+  <h3>Схема 3.1. Содержание режима ГГ <span class="src">ст. 7</span></h3>
+  <div class="tree">
+    <div class="node root">Режим Государственной границы включает правила</div>
+    <ul>
+      <li><div class="node">содержания Государственной границы</div></li>
+      <li><div class="node">пересечения ГГ лицами и транспортными средствами</div></li>
+      <li><div class="node">перемещения через ГГ товаров и животных</div></li>
+      <li><div class="node">пропуска через ГГ лиц, транспортных средств, товаров и животных</div></li>
+      <li><div class="node">ведения на ГГ или вблизи неё хозяйственной, промысловой и иной деятельности</div></li>
+      <li><div class="node">разрешения с иностранными государствами инцидентов, связанных с нарушением указанных правил</div></li>
+    </ul>
+  </div>
+  <p class="src">Режим ГГ устанавливается Законом и международными договорами РФ.</p>
+
+  <h3>Схема 3.2. Пересечение Государственной границы <span class="src">ст. 9, 11</span></h3>
+  <div class="flow">
+    <div class="node green"><span class="t">Пересечение ГГ лицами и транспортными средствами</span><small>осуществляется в пунктах пропуска через ГГ</small></div>
+    <div class="arrow"></div>
+    <div class="node green"><span class="t">Основание пропуска через ГГ</span><small>наличие действительных документов на право въезда в РФ или выезда из РФ</small></div>
+    <div class="arrow"></div>
+    <div class="node red"><span class="t">Пересечение вне пунктов пропуска</span><small>допускается только в случаях, предусмотренных законодательством и международными договорами РФ; в остальных случаях — нарушение режима ГГ</small></div>
+  </div>
+</section>
+
+<!-- 4 -->
+<section id="pr">
+  <div class="sec-head"><span class="no">4</span><h2>Пограничный режим</h2></div>
+  <div class="def">
+    <div class="k">Статья 16 Закона № 4730-1 (ред. ФЗ от 19.12.2023 № 604-ФЗ)</div>
+    <p>Пограничный режим устанавливается <b>исключительно в целях создания необходимых условий охраны Государственной границы</b>. Установление иных правил пограничного режима не допускается.</p>
+  </div>
+
+  <h3>Схема 4.1. Содержание пограничного режима</h3>
+  <div class="tree">
+    <div class="node root">Пограничный режим включает правила</div>
+    <ul>
+      <li><div class="node blue"><span class="t">В пограничной зоне</span></div>
+        <ul>
+          <li><div class="node">въезда (прохода), временного пребывания, передвижения лиц и транспортных средств</div></li>
+          <li><div class="node">ведения хозяйственной, промысловой и иной деятельности</div></li>
+          <li><div class="node">проведения массовых общественно-политических, культурных и других мероприятий</div></li>
+        </ul>
+      </li>
+      <li><div class="node blue"><span class="t">В российской части вод пограничных рек, озёр и иных водных объектов, во внутренних морских водах и территориальном море</span></div>
+        <ul>
+          <li><div class="node">ведения промысловой, исследовательской, изыскательской и иной деятельности</div></li>
+          <li><div class="node">пребывания и плавания российских маломерных самоходных и несамоходных судов</div></li>
+        </ul>
+      </li>
+    </ul>
+  </div>
+
+  <h3>Схема 4.2. Установление пограничного режима</h3>
+  <div class="flow">
+    <div class="node"><span class="t">Закон № 4730-1, ст. 16</span><small>определяет содержание пограничного режима</small></div>
+    <div class="arrow"></div>
+    <div class="node"><span class="t">Приказ ФСБ России от 07.08.2017 № 454</span><small>Правила пограничного режима</small></div>
+    <div class="arrow"></div>
+    <div class="node"><span class="t">Приказы ФСБ России о пределах пограничной зоны</span><small>по субъектам РФ</small></div>
+    <div class="arrow"></div>
+    <div class="node green"><span class="t">Предупреждающие знаки</span><small>устанавливаются на въездах в пограничную зону</small></div>
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="po">
+  <div class="sec-head"><span class="no">5</span><h2>Полномочия пограничных органов</h2></div>
+  <p class="src">Ст. 30 Закона № 4730-1; ст. 12, 13 ФЗ «О федеральной службе безопасности»</p>
+
+  <h3>Схема 5.1. Обязанности пограничных органов</h3>
+  <div class="tree">
+    <div class="node root">Пограничные органы</div>
+    <ul>
+      <li><div class="node">осуществляют охрану ГГ на суше, море, реках, озёрах и иных водных объектах, в пунктах пропуска</div></li>
+      <li><div class="node">осуществляют пропуск через ГГ лиц, транспортных средств, грузов, товаров и животных</div></li>
+      <li><div class="node">обеспечивают всеми имеющимися мерами недопущение противоправного изменения прохождения ГГ на местности</div></li>
+      <li><div class="node">осуществляют контроль за соблюдением режима ГГ, пограничного режима и режима в пунктах пропуска</div></li>
+      <li><div class="node">осуществляют разведывательную, контрразведывательную, оперативно-розыскную деятельность; производят дознание по делам, отнесённым к их ведению</div></li>
+    </ul>
+  </div>
+
+  <h3>Схема 5.2. Права пограничных органов</h3>
+  <div class="grid2">
+    <div class="node blue"><span class="t">Требовать</span><small>соблюдения режима ГГ, пограничного режима и режима в пунктах пропуска</small></div>
+    <div class="node blue"><span class="t">Проверять документы</span><small>на право въезда, пребывания, передвижения в пограничной зоне и пересечения ГГ</small></div>
+    <div class="node blue"><span class="t">Приглашать и опрашивать</span><small>получать объяснения по обстоятельствам нарушений</small></div>
+    <div class="node blue"><span class="t">Задерживать и доставлять</span><small>нарушителей режимов и лиц, подозреваемых в совершении преступлений</small></div>
+    <div class="node blue"><span class="t">Досматривать</span><small>личный досмотр, досмотр вещей и транспортных средств, изъятие вещей и документов</small></div>
+    <div class="node blue"><span class="t">Составлять протоколы</span><small>об административных правонарушениях</small></div>
+    <div class="node blue"><span class="t">Проникать</span><small>в жилые и иные помещения, на земельные участки при преследовании нарушителей, с уведомлением прокурора (ст. 14.1 ФЗ «О ФСБ»)</small></div>
+    <div class="node blue"><span class="t">Использовать транспорт и связь</span><small>организаций и граждан для преследования нарушителей, с возмещением расходов</small></div>
+    <div class="node blue"><span class="t">Ограничивать работы</span><small>временно, при угрозе интересам РФ на ГГ, с уведомлением органов местного самоуправления</small></div>
+  </div>
+
+  <h3>Схема 5.3. Административное задержание <span class="src">ст. 27.5 КоАП РФ</span></h3>
+  <div class="grid2">
+    <div class="node green"><span class="t">До 3 часов</span><small>общий срок</small></div>
+    <div class="node amber"><span class="t">До 48 часов</span><small>по делам о нарушении режима ГГ, пограничного режима, режима в пунктах пропуска</small></div>
+  </div>
+  <p class="src">Срок исчисляется с момента доставления. Задержанному разъясняются права, предусмотренные ст. 25.1 КоАП РФ и ст. 51 Конституции РФ.</p>
+</section>
+
+<!-- 6 -->
+<section id="oruzhie">
+  <div class="sec-head"><span class="no">6</span><h2>Применение оружия и специальных средств</h2></div>
+
+  <h3>Схема 6.1. Правовые основания</h3>
+  <div class="tree">
+    <div class="node root">Военнослужащие пограничных органов</div>
+    <ul>
+      <li><div class="node blue"><span class="t">При защите ГГ в пределах приграничной территории</span><small>ст. 35, 36 Закона № 4730-1; постановление Правительства РФ от 24.02.2010 № 80</small></div></li>
+      <li><div class="node blue"><span class="t">В иных случаях</span><small>ст. 14.2 (порядок), 14.3 (оружие), 14.5 (специальные средства) ФЗ «О ФСБ»</small></div></li>
+    </ul>
+  </div>
+
+  <h3>Схема 6.2. Случаи применения оружия и боевой техники</h3>
+  <div class="grid2">
+    <div class="node"><span class="t">Ст. 35 Закона</span><small>
+      — отражение вооружённого нападения, вторжения на территорию РФ;<br>
+      — пресечение вооружённых провокаций на ГГ;<br>
+      — отражение нападения на подразделения и объекты пограничных органов, ВС РФ, других войск и органов, участвующих в защите ГГ;<br>
+      — оказание помощи кораблям, самолётам, вертолётам при отражении вооружённого нападения на них;<br>
+      — пресечение нарушений ГГ и режимов в порядке, установленном Правительством РФ</small></div>
+    <div class="node"><span class="t">Ст. 14.3 ФЗ «О ФСБ»</span><small>
+      — защита себя или другого лица от посягательства, опасного для жизни и здоровья;<br>
+      — пресечение попытки завладеть оружием, техникой;<br>
+      — отражение нападения на объекты, транспорт органов ФСБ;<br>
+      — освобождение заложников;<br>
+      — задержание лица, оказывающего вооружённое сопротивление;<br>
+      — пресечение побега из-под стражи;<br>
+      — остановка транспортного средства, создающего угрозу жизни и здоровью</small></div>
+  </div>
+
+  <h3>Схема 6.3. Специальные средства <span class="src">ст. 36 Закона · ст. 14.5 ФЗ «О ФСБ»</span></h3>
+  <div class="tree">
+    <div class="node root">Специальные средства применяются</div>
+    <ul>
+      <li><div class="node green">во всех случаях, когда разрешено применение оружия</div></li>
+      <li><div class="node">для отражения нападения на граждан и военнослужащих</div></li>
+      <li><div class="node">для пресечения правонарушений и преодоления противодействия законным требованиям</div></li>
+      <li><div class="node">для задержания и доставления лиц, оказывающих сопротивление</div></li>
+      <li><div class="node">для остановки транспортных средств</div></li>
+      <li><div class="node">для освобождения захваченных зданий, помещений, транспортных средств</div></li>
+    </ul>
+  </div>
+
+  <h3>Схема 6.4. Порядок применения <span class="src">ст. 35 Закона · ст. 14.2 ФЗ «О ФСБ»</span></h3>
+  <div class="flow">
+    <div class="node"><div class="step"><span class="n">1</span><div><b>Основание</b> — наличие случая, предусмотренного законом</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">2</span><div><b>Предупреждение</b> о принадлежности к органам ФСБ и ясно выраженное предупреждение о намерении применить оружие (СС, физическую силу); предоставление времени для выполнения требований</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">3</span><div><b>Предупредительные выстрелы</b> — перед применением оружия и боевой техники</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">4</span><div><b>Применение</b> — с учётом обстановки, характера и степени опасности; с минимизацией ущерба</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">5</span><div><b>Первая помощь</b> лицам, получившим телесные повреждения</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">6</span><div><b>Доклад</b> командиру (начальнику); при ранении или смерти лица — уведомление прокурора</div></div></div>
+  </div>
+  <p class="src">Без предупреждения — если промедление создаёт непосредственную опасность жизни и здоровью граждан, военнослужащих либо может повлечь иные тяжкие последствия.</p>
+
+  <div class="stop">
+    <div class="k">Запрещается</div>
+    <ul>
+      <li>применять оружие в отношении <b>женщин, лиц с явными признаками инвалидности, несовершеннолетних</b>, когда их возраст очевиден или известен, — за исключением случаев оказания ими вооружённого сопротивления, совершения вооружённого или группового нападения;</li>
+      <li>применять огнестрельное оружие <b>при значительном скоплении людей</b>, если могут пострадать случайные лица, — за исключением случаев пресечения террористического акта, освобождения заложников, отражения группового или вооружённого нападения на важные объекты.</li>
+    </ul>
+  </div>
+  <p class="src">Военнослужащие не несут ответственности за вред, причинённый при применении оружия, специальных средств и физической силы по основаниям и в порядке, установленным законом (ст. 14 ФЗ «О ФСБ»).</p>
+</section>
+
+<!-- 7 -->
+<section id="vezd">
+  <div class="sec-head"><span class="no">7</span><h2>Порядок въезда (прохода), пребывания и выезда из пограничной зоны</h2></div>
+  <p class="src">Правила пограничного режима, утв. приказом ФСБ России от 07.08.2017 № 454 (ред. от 25.05.2024)</p>
+
+  <h3>Схема 7.1. Общий порядок</h3>
+  <div class="flow">
+    <div class="node green"><span class="t">Въезд (проход)</span><small>в местах въезда (прохода), установленных на путях сообщения и обозначенных предупреждающими знаками (п. 1; прил. № 1)</small></div>
+    <div class="arrow"></div>
+    <div class="node blue"><span class="t">Предъявление документов</span><small>документ, удостоверяющий личность, и (при необходимости) пропуск либо документ из прил. № 2 — по требованию пограничного наряда</small></div>
+    <div class="arrow"></div>
+    <div class="node blue"><span class="t">Временное пребывание и передвижение</span><small>при наличии при себе документов, на основании которых осуществлён въезд (проход); в пределах района и срока, указанных в пропуске</small></div>
+    <div class="arrow"></div>
+    <div class="node green"><span class="t">Выезд (выход)</span><small>через места въезда (прохода); лицами, въехавшими по пропуску, — до истечения срока его действия</small></div>
+  </div>
+
+  <h3>Схема 7.2. Какие документы требовать (дерево решения)</h3>
+  <div class="q">Кто следует в пограничную зону?</div>
+  <div class="branches">
+    <div class="br">
+      <span class="lbl">Гражданин РФ</span>
+      <div class="q">Куда следует?</div>
+      <div class="branches">
+        <div class="br">
+          <span class="lbl">До 5-км полосы вдоль ГГ</span>
+          <div class="res ok">Документ, удостоверяющий личность<small>п. 2 «а»</small></div>
+        </div>
+        <div class="br">
+          <span class="lbl">В 5-км полосу / за рубеж ИТС</span>
+          <div class="q">Имеет документ из приложения № 2?</div>
+          <div class="branches">
+            <div class="br">
+              <span class="lbl">Да</span>
+              <div class="res ok">Документ, удостоверяющий личность + документ из прил. № 2<small>п. 2 «в»</small></div>
+            </div>
+            <div class="br">
+              <span class="lbl">Нет</span>
+              <div class="res pass">Документ, удостоверяющий личность + пропуск<small>индивидуальный или коллективный</small></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="br">
+      <span class="lbl">Гражданин РФ или РБ — российско-белорусский участок</span>
+      <div class="res ok">Документ, удостоверяющий личность<small>п. 2 «г»</small></div>
+    </div>
+    <div class="br">
+      <span class="lbl">Иностранный гражданин, лицо без гражданства</span>
+      <div class="res pass">Документ, удостоверяющий личность и признаваемый в РФ, + пропуск</div>
+    </div>
+  </div>
+
+  <h3>Схема 7.3. Пропуска</h3>
+  <div class="tree">
+    <div class="node root">Пропуск для въезда (прохода) в пограничную зону</div>
+    <ul>
+      <li><div class="node blue"><span class="t">Виды</span></div>
+        <ul>
+          <li><div class="node">индивидуальный — на одно лицо (транспортное средство)</div></li>
+          <li><div class="node">коллективный — на группу лиц по списку</div></li>
+        </ul>
+      </li>
+      <li><div class="node blue"><span class="t">Выдаёт</span><small>пограничный орган по заявлению (лично либо через ЕПГУ); порядок — приказ ФСБ России от 28.02.2023 № 102</small></div></li>
+      <li><div class="node blue"><span class="t">Действителен</span><small>только при предъявлении документа, удостоверяющего личность; в пределах указанных района и срока</small></div></li>
+      <li><div class="node blue"><span class="t">Продление пребывания</span><small>оформляется новый пропуск</small></div></li>
+    </ul>
+  </div>
+
+  <h3>Схема 7.4. Деятельность в пограничной зоне</h3>
+  <div class="grid2">
+    <div class="node amber"><span class="t">По разрешению пограничного органа</span><small>хозяйственная, промысловая и иная деятельность; массовые мероприятия; содержание и выпас скота; деятельность в российской части вод пограничных водных объектов (приказ № 102)</small></div>
+    <div class="node red"><span class="t">Запрещено</span><small>повреждать, переносить предупреждающие знаки, пограничные знаки и инженерно-технические сооружения</small></div>
+  </div>
+
+  <h3>Схема 7.5. Действия пограничного наряда при проверке</h3>
+  <div class="flow">
+    <div class="node"><div class="step"><span class="n">1</span><div>Представиться, сообщить причину обращения</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">2</span><div>Потребовать документ, удостоверяющий личность, и основание въезда (пропуск, документ из прил. № 2)</div></div></div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">3</span><div>Проверить подлинность, срок действия, соответствие фотографии и данных, район и маршрут, транспортное средство</div></div></div>
+    <div class="arrow"></div>
+    <div class="grid2" style="margin:0">
+      <div class="res ok">Нарушений нет<small>документы возвратить</small></div>
+      <div class="res pass">Выявлено нарушение<small>разъяснить права, составить протокол по ст. 18.2 КоАП РФ либо доставить в подразделение</small></div>
+    </div>
+    <div class="arrow"></div>
+    <div class="node"><div class="step"><span class="n">4</span><div>Доложить старшему пограничного наряда</div></div></div>
+  </div>
+</section>
+
+<!-- 8 -->
+<section id="dok">
+  <div class="sec-head"><span class="no">8</span><h2>Необходимые документы</h2></div>
+
+  <h3>Схема 8.1. Сводная таблица</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>Категория лиц / направление</th><th>Документы</th><th>Основание</th></tr></thead>
+    <tbody>
+      <tr><td>Граждане РФ — в пограничную зону до 5-км полосы</td><td>Документ, удостоверяющий личность</td><td>п. 2 «а»</td></tr>
+      <tr><td>Граждане РФ — в 5-км полосу, за рубеж ИТС</td><td>Документ, удостоверяющий личность + пропуск либо документ из прил. № 2</td><td>п. 2 «в»; прил. № 2</td></tr>
+      <tr><td>Граждане РФ и РБ — российско-белорусский участок</td><td>Документ, удостоверяющий личность</td><td>п. 2 «г»</td></tr>
+      <tr><td>Иностранные граждане, ЛБГ</td><td>Документ, удостоверяющий личность и признаваемый в РФ, + пропуск</td><td>Правила № 454</td></tr>
+      <tr><td>Транспортные средства</td><td>Документы на ТС; пропуск на ТС — в случаях, когда пропуск требуется для лица</td><td>Правила № 454</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Схема 8.2. Документы, удостоверяющие личность гражданина РФ</h3>
+  <div class="grid2">
+    <div class="node">Паспорт гражданина РФ</div>
+    <div class="node">Свидетельство о рождении (лица до 14 лет)</div>
+    <div class="node">Удостоверение личности военнослужащего, военный билет</div>
+    <div class="node">Временное удостоверение личности гражданина РФ</div>
+  </div>
+
+  <h3>Схема 8.3. Приложение № 2 — документы, при наличии которых въезд осуществляется по документам, удостоверяющим личность</h3>
+  <div class="tree">
+    <div class="node root">Документы приложения № 2 (для граждан РФ)</div>
+    <ul>
+      <li><div class="node">документ о регистрации по месту жительства в пределах муниципального района (городского округа), на территории которого установлена пограничная зона; для 5-км полосы — также близких родственников</div></li>
+      <li><div class="node">документ, подтверждающий служебное (должностное) положение</div></li>
+      <li><div class="node">путевой лист — при следовании по служебным обязанностям</div></li>
+      <li><div class="node">документ образовательной организации о прохождении практики (стажировки)</div></li>
+      <li><div class="node">направление на лечение, путёвка на санаторно-курортное лечение</div></li>
+      <li><div class="node">договор о реализации туристского продукта</div></li>
+      <li><div class="node">разрешение пограничного органа на ведение деятельности в пограничной зоне</div></li>
+      <li><div class="node">справка, выданная не позднее чем за шесть месяцев до её представления</div></li>
+    </ul>
+  </div>
+  <p class="src">Условия применения каждого документа установлены приложением № 2 к Правилам пограничного режима.</p>
 </section>
 
 </div></main>
 
 <footer><div class="wrap">
-  <p><b>Нормативная база.</b> Закон РФ от 01.04.1993 № 4730-1 «О Государственной границе Российской Федерации». ФЗ от 03.04.1995 № 40-ФЗ «О федеральной службе безопасности» (ст. 13, 14–14.5). Приказ ФСБ России от 07.08.2017 № 454 «Об утверждении Правил пограничного режима» (зарег. Минюстом 02.11.2017 № 48778; изм. приказами № 283 от 19.06.2018 и № 205 от 25.05.2024). Приказ ФСБ России от 28.02.2023 № 102 (выдача пропусков и разрешений). Постановление Правительства РФ от 24.02.2010 № 80. КоАП РФ гл. 18, ст. 27.5. УК РФ ст. 322, 322.1, 323.</p>
-  <p>Памятка — краткое изложение норм, а не их официальный текст. При спорной ситуации руководствуйтесь действующей редакцией актов и указаниями командования.</p>
+  <p><b>Нормативные правовые акты.</b> Закон РФ от 01.04.1993 № 4730-1 «О Государственной границе Российской Федерации». Федеральный закон от 03.04.1995 № 40-ФЗ «О федеральной службе безопасности». Приказ ФСБ России от 07.08.2017 № 454 «Об утверждении Правил пограничного режима» (зарегистрирован Минюстом России 02.11.2017, рег. № 48778; в ред. приказов ФСБ России от 19.06.2018 № 283, от 25.05.2024 № 205). Приказ ФСБ России от 28.02.2023 № 102. Постановление Правительства РФ от 24.02.2010 № 80. КоАП РФ (гл. 18, ст. 27.5). УК РФ (ст. 322, 322.1, 323).</p>
+  <p>Памятка содержит краткое изложение норм и не заменяет официальный текст нормативных правовых актов. Применять в действующей редакции.</p>
 </div></footer>
