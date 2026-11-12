@@ -218,3 +218,43 @@ def test_run_agent_sends_incomplete_report_back(monkeypatch):
     assert len(run.result.outcomes) == 5
     back = msgs.calls[1]["messages"][-1]["content"][0]
     assert back["type"] == "tool_result" and back["is_error"] and back["tool_use_id"] == "t1"
+
+
+# ---------- экономичный режим и учёт расходов ----------
+def test_economy_mode_defaults(monkeypatch):
+    monkeypatch.delenv("LLM_MODEL_CHIEF", raising=False)
+    monkeypatch.delenv("LLM_MODEL_AGENTS", raising=False)
+    cfg = Settings()
+    assert cfg.llm_model_chief == "claude-opus-5-5"
+    assert cfg.llm_model_agents == "claude-sonnet-5-5"
+
+
+def test_cost_depends_on_model():
+    opus = llm.AgentRun(None, 100_000, 10_000, 2, "claude-opus-5-5")
+    sonnet = llm.AgentRun(None, 100_000, 10_000, 2, "claude-sonnet-5-5")
+    assert opus.cost_usd == pytest.approx(0.4 + 0.2 + 0.02)
+    assert sonnet.cost_usd == pytest.approx(0.2 + 0.1 + 0.02)
+
+
+def test_usage_accumulates_real_cost():
+    db = DB(":memory:")
+    db.add_llm_usage(analyses=1)
+    db.add_llm_usage(input_tokens=1000, output_tokens=100, web_searches=1, cost_usd=0.12)
+    db.add_llm_usage(input_tokens=2000, output_tokens=300, cost_usd=0.08)
+    u = db.llm_usage_since(30)
+    assert u["analyses"] == 1 and u["cost_usd"] == pytest.approx(0.20) and u["input_tokens"] == 3000
+
+
+def test_sonnet_agent_uses_new_web_search_and_fallback(monkeypatch):
+    report = {"outcomes": [{"selection": o, "stance": "neutral", "comment": "c"}
+                           for o in ("home", "draw", "away", "over", "under")],
+              "hidden_risks": [], "severity": "low", "summary": "s"}
+    msgs = FakeMessages([_resp("tool_use", [SimpleNamespace(type="tool_use", id="t", name="submit_report",
+                                                            input=report)])])
+    monkeypatch.setattr(llm, "_client", SimpleNamespace(messages=msgs, beta=SimpleNamespace(messages=msgs)))
+    asyncio.run(llm.run_agent(model="claude-sonnet-5-5", effort="low", system="s", prompt="p",
+                              schema=DevilReport, web_search=True))
+    call = msgs.calls[0]
+    assert call["model"] == "claude-sonnet-5-5"
+    assert call["tools"][0]["type"] == "web_search_20260209"
+    assert call["fallbacks"] == "default"

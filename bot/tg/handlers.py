@@ -10,7 +10,6 @@ from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from ..agents.llm import PRICES, WEB_SEARCH_PRICE
 from ..config import settings
 from ..db import DB, month_start_utc
 from ..pipeline import AnalysisResult, Engine
@@ -174,14 +173,14 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
     @owner.message(Command("usage"))
     async def cmd_usage(message: Message) -> None:
         u = db.llm_usage_since(30)
-        p_in, p_out = PRICES.get(settings.llm_model_agents, PRICES["claude-opus-5-5"])
-        cost = u["input_tokens"] / 1e6 * p_in + u["output_tokens"] / 1e6 * p_out + u["web_searches"] * WEB_SEARCH_PRICE
+        cost = u["cost_usd"]
+        avg = cost / u["analyses"] if u["analyses"] else 0
         await message.answer(
             "<b>Claude API за 30 дней</b>\n"
             f"Разборов матчей: {u['analyses']}\n"
             f"Токенов: вход {u['input_tokens']:,}, выход {u['output_tokens']:,}\n"
             f"Веб-поисков: {u['web_searches']}\n"
-            f"Оценка расходов: ≈ ${cost:.2f}\n"
+            f"Оценка расходов: ≈ ${cost:.2f} (в среднем ${avg:.2f} за разбор)\n"
             f"Модели: главный {settings.llm_model_chief}, помощники {settings.llm_model_agents}\n"
             f"Кредитов The Odds API осталось: {engine.odds.requests_remaining or 'неизвестно'}"
             .replace(",", " ")

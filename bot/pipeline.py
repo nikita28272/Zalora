@@ -282,7 +282,7 @@ class Engine:
     def _track(self, res: AnalysisResult, run: AgentRun) -> None:
         res.cost_usd += run.cost_usd
         self.db.add_llm_usage(input_tokens=run.input_tokens, output_tokens=run.output_tokens,
-                              web_searches=run.web_searches)
+                              web_searches=run.web_searches, cost_usd=run.cost_usd)
 
     async def _order(self, res: AnalysisResult, who: str, task: Callable[[], Awaitable[AgentRun]]):
         """Поручение подчинённому: при сбое главный повторяет задание один раз."""

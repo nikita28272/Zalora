@@ -59,7 +59,8 @@ class Settings:
 
     # --- LLM ---
     llm_model_chief: str = field(default_factory=lambda: _env("LLM_MODEL_CHIEF", "claude-opus-5-5"))
-    llm_model_agents: str = field(default_factory=lambda: _env("LLM_MODEL_AGENTS", "claude-opus-5-5"))
+    # Экономичный режим: босс на Opus, помощники на Sonnet (примерно вдвое дешевле Opus)
+    llm_model_agents: str = field(default_factory=lambda: _env("LLM_MODEL_AGENTS", "claude-sonnet-5-5"))
     llm_effort_chief: str = field(default_factory=lambda: _env("LLM_EFFORT_CHIEF", "medium"))
     llm_effort_agents: str = field(default_factory=lambda: _env("LLM_EFFORT_AGENTS", "low"))
     web_search_enabled: bool = field(default_factory=lambda: _bool("WEB_SEARCH_ENABLED", True))

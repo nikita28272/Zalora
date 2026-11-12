@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS llm_usage (
     input_tokens INTEGER NOT NULL DEFAULT 0,
     output_tokens INTEGER NOT NULL DEFAULT 0,
     web_searches INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (day)
 );
 """
@@ -182,6 +183,9 @@ class DB:
         for col, decl in _MIGRATIONS.items():
             if col not in existing:
                 self.conn.execute(f"ALTER TABLE signals ADD COLUMN {col} {decl}")
+        usage_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(llm_usage)")}
+        if "cost_usd" not in usage_cols:
+            self.conn.execute("ALTER TABLE llm_usage ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
         self.conn.commit()
 
     # ---------- key-value ----------
@@ -314,16 +318,17 @@ class DB:
         return row["analyses"] if row else 0
 
     def add_llm_usage(self, analyses: int = 0, input_tokens: int = 0, output_tokens: int = 0,
-                      web_searches: int = 0) -> None:
+                      web_searches: int = 0, cost_usd: float = 0.0) -> None:
         self.conn.execute(
-            """INSERT INTO llm_usage(day, analyses, input_tokens, output_tokens, web_searches)
-               VALUES(?, ?, ?, ?, ?)
+            """INSERT INTO llm_usage(day, analyses, input_tokens, output_tokens, web_searches, cost_usd)
+               VALUES(?, ?, ?, ?, ?, ?)
                ON CONFLICT(day) DO UPDATE SET
                  analyses = analyses + excluded.analyses,
                  input_tokens = input_tokens + excluded.input_tokens,
                  output_tokens = output_tokens + excluded.output_tokens,
-                 web_searches = web_searches + excluded.web_searches""",
-            (local_today(), analyses, input_tokens, output_tokens, web_searches),
+                 web_searches = web_searches + excluded.web_searches,
+                 cost_usd = cost_usd + excluded.cost_usd""",
+            (local_today(), analyses, input_tokens, output_tokens, web_searches, cost_usd),
         )
         self.conn.commit()
 
@@ -331,8 +336,10 @@ class DB:
         since = (datetime.now(_tz()).date() - timedelta(days=days)).isoformat()
         row = self.conn.execute(
             """SELECT COALESCE(SUM(analyses),0) a, COALESCE(SUM(input_tokens),0) i,
-                      COALESCE(SUM(output_tokens),0) o, COALESCE(SUM(web_searches),0) w
+                      COALESCE(SUM(output_tokens),0) o, COALESCE(SUM(web_searches),0) w,
+                      COALESCE(SUM(cost_usd),0) c
                FROM llm_usage WHERE day >= ?""",
             (since,),
         ).fetchone()
-        return {"analyses": row["a"], "input_tokens": row["i"], "output_tokens": row["o"], "web_searches": row["w"]}
+        return {"analyses": row["a"], "input_tokens": row["i"], "output_tokens": row["o"],
+                "web_searches": row["w"], "cost_usd": row["c"]}
