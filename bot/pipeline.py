@@ -1,4 +1,17 @@
-"""Главный конвейер: сбор данных, отбор матчей, работа агентов, сигналы и расчёт итогов."""
+"""Главный конвейер.
+
+Порядок (иерархия):
+  1. Статистик (код) и рынок дают цифры по каждому исходу.
+  2. Главный ставит задачи подчинённым: новости и зарубежные аналитики (параллельно),
+     затем адвокат дьявола. Каждый обязан высказаться по всем пяти исходам.
+  3. Финансист докладывает состояние банка и лимиты.
+  4. Только после ВСЕХ докладов главный выносит вердикт. Если кто-то не доложил даже
+     после повторного задания, вердикт не выносится.
+  5. Владелец отмечает в Telegram, поставил ли он. Финансист учитывает только реальные ставки.
+  6. После матча аналитик проверяет исход, финансист меняет банк, главный докладывает владельцу.
+
+Работаем только в прематче.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +20,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from typing import Awaitable, Callable
 from zoneinfo import ZoneInfo
 
-from .agents.llm import AgentError, AgentRun
-from .agents.schemas import ChiefVerdict, DevilReport, ExpertsReport, NewsReport
 from .agents import team
+from .agents.llm import AgentError, AgentRun
+from .agents.schemas import ALL_OUTCOMES, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
 from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds
 from .analysis.market import MarketView, market_view
 from .analysis.poisson import ModelOutput, PoissonModel
@@ -38,6 +52,10 @@ def local(dt: datetime) -> datetime:
     return dt.astimezone(ZoneInfo(settings.timezone))
 
 
+def is_prematch(kickoff: datetime) -> bool:
+    return kickoff - datetime.now(timezone.utc) >= timedelta(minutes=settings.min_minutes_before_kickoff)
+
+
 @dataclass
 class MatchContext:
     idx: int
@@ -58,7 +76,7 @@ class MatchContext:
         return f"{self.event.home_team} — {self.event.away_team}"
 
     def p_quant(self, sel: str) -> float | None:
-        """Средняя вероятность рынка и модели — наша «количественная» оценка."""
+        """Средняя вероятность рынка и модели — «количественная» оценка до агентов."""
         pm = self.market.fair.get(sel)
         if pm is None:
             return None
@@ -85,13 +103,13 @@ class MatchContext:
     def brief(self) -> str:
         return (
             f"{self.event.league.name_ru}: {self.event.home_team} (хозяева) — {self.event.away_team} (гости)\n"
-            f"Начало: {local(self.event.kickoff):%d.%m.%Y %H:%M} ({settings.timezone})"
+            f"Начало: {local(self.event.kickoff):%d.%m.%Y %H:%M} ({settings.timezone}). Ставка — только прематч."
         )
 
     def numbers(self) -> str:
         m = self.market
-        lines = [f"РЫНОК ({m.n_books} букмекеров, источник честной линии: {m.source}):"]
-        for sel in ("home", "draw", "away", "over", "under"):
+        lines = [f"ДОКЛАД РЫНКА ({m.n_books} букмекеров, источник честной линии: {m.source}):"]
+        for sel in ALL_OUTCOMES:
             if sel in m.fair:
                 lines.append(
                     f"  {SEL_SHORT[sel]}: вероятность {m.fair[sel]:.1%}, средний кэф {m.avg_odds.get(sel, 0):.2f},"
@@ -100,13 +118,13 @@ class MatchContext:
         if self.model:
             mo = self.model
             lines.append(
-                f"СТАТИСТИЧЕСКАЯ МОДЕЛЬ (Пуассон, сезон): ожидаемые голы {mo.lambda_home:.2f} : {mo.lambda_away:.2f}"
-                f" (матчей в выборке: {mo.home_games} и {mo.away_games})"
+                f"ДОКЛАД СТАТИСТИКА (модель Пуассона, сезон): ожидаемые голы {mo.lambda_home:.2f} : "
+                f"{mo.lambda_away:.2f} (матчей в выборке: {mo.home_games} и {mo.away_games})"
             )
-            for sel in ("home", "draw", "away", "over", "under"):
+            for sel in ALL_OUTCOMES:
                 lines.append(f"  {SEL_SHORT[sel]}: {mo.probs[sel]:.1%}")
         else:
-            lines.append("СТАТИСТИЧЕСКАЯ МОДЕЛЬ: недостаточно данных (например, еврокубок или начало сезона).")
+            lines.append("ДОКЛАД СТАТИСТИКА: недостаточно данных (например, еврокубок или начало сезона).")
         for name, row, form, last in (
             (self.event.home_team, self.home_row, self.home_form, self.home_last),
             (self.event.away_team, self.away_row, self.away_form, self.away_last),
@@ -124,6 +142,17 @@ class MatchContext:
 
 
 @dataclass
+class OutcomeRow:
+    selection: str
+    p_market: float | None
+    p_model: float | None
+    p_chief: float | None  # как оценил главный
+    p_final: float | None  # после нормировки и ограничения отклонения от рынка
+    odds: float | None
+    edge: float | None
+
+
+@dataclass
 class AnalysisResult:
     ctx: MatchContext
     news: NewsReport | None = None
@@ -131,6 +160,7 @@ class AnalysisResult:
     devil: DevilReport | None = None
     verdict: ChiefVerdict | None = None
     candidate: str | None = None
+    table: dict[str, OutcomeRow] = field(default_factory=dict)
     p_final: float | None = None
     odds_ref: float | None = None
     final_edge: float | None = None
@@ -140,6 +170,14 @@ class AnalysisResult:
     skip_reason: str | None = None
     errors: list[str] = field(default_factory=list)
     cost_usd: float = 0.0
+
+
+def _normalize(probs: dict[str, float], group: tuple[str, ...]) -> None:
+    total = sum(probs[s] for s in group if s in probs)
+    if total > 0:
+        for s in group:
+            if s in probs:
+                probs[s] /= total
 
 
 class Engine:
@@ -168,7 +206,7 @@ class Engine:
         return model, rows
 
     async def load_matches(self) -> list[MatchContext]:
-        events = await self.odds.upcoming()
+        events = [e for e in await self.odds.upcoming() if is_prematch(e.kickoff)]
         codes = sorted({e.league.fd_code for e in events})
         league_data = {code: await self._league_data(code) for code in codes}
 
@@ -204,17 +242,28 @@ class Engine:
         self._headlines = (time.monotonic(), fresh)
         return fresh
 
-    # ---------- анализ одного матча ----------
-    def _dossier(self, ctx: MatchContext, res: AnalysisResult, with_devil: bool) -> str:
+    # ---------- доклады ----------
+    def finance_report(self) -> str:
+        st = self.db.risk_state()
+        n_play, s_play = self.db.in_play()
+        return (
+            "ДОКЛАД ФИНАНСИСТА:\n"
+            f"  банк {st.bankroll:.0f}, в игре {n_play} ставок на {s_play:.0f}\n"
+            f"  сигналов сегодня {st.bets_today} из {settings.max_bets_per_day}, "
+            f"результат дня {st.profit_today:+.0f} (лимит убытка {settings.daily_loss_limit_pct:.0%} банка)\n"
+            f"  проигрышей подряд {st.losing_streak} (пауза после {settings.stop_after_losses})\n"
+            f"  размер ставки: {settings.kelly_fraction:g} Келли, не больше {settings.max_stake_pct:.0%} банка; "
+            f"минимальный перевес {settings.min_edge:.0%}, коэффициенты {settings.min_odds}–{settings.max_odds}"
+        )
+
+    def _dossier(self, ctx: MatchContext, res: AnalysisResult, for_chief: bool) -> str:
         parts = [f"МАТЧ\n{ctx.brief()}", ctx.numbers()]
         if res.news:
-            parts.append("ОТЧЁТ АГЕНТА НОВОСТЕЙ:\n" + res.news.model_dump_json(indent=1))
-        else:
-            parts.append("ОТЧЁТ АГЕНТА НОВОСТЕЙ: недоступен.")
+            parts.append("ДОКЛАД АГЕНТА НОВОСТЕЙ:\n" + res.news.model_dump_json(indent=1))
         if res.experts:
-            parts.append("ОТЧЁТ ПО ЗАРУБЕЖНЫМ АНАЛИТИКАМ:\n" + res.experts.model_dump_json(indent=1))
-        else:
-            parts.append("ОТЧЁТ ПО ЗАРУБЕЖНЫМ АНАЛИТИКАМ: недоступен.")
+            parts.append("ДОКЛАД ПО ЗАРУБЕЖНЫМ АНАЛИТИКАМ:\n" + res.experts.model_dump_json(indent=1))
+        elif not settings.web_search_enabled:
+            parts.append("ДОКЛАД ПО ЗАРУБЕЖНЫМ АНАЛИТИКАМ: отключён (нет веб-поиска).")
         if res.candidate:
             sel = res.candidate
             p = ctx.p_quant(sel) or 0
@@ -224,14 +273,29 @@ class Engine:
             )
         else:
             parts.append("КАНДИДАТ ОТ КОЛИЧЕСТВЕННОГО АНАЛИЗА: нет (модель не нашла перевеса или данных мало).")
-        if with_devil and res.devil:
-            parts.append("ВОЗРАЖЕНИЯ АДВОКАТА ДЬЯВОЛА:\n" + res.devil.model_dump_json(indent=1))
+        if for_chief:
+            if res.devil:
+                parts.append("ДОКЛАД АДВОКАТА ДЬЯВОЛА:\n" + res.devil.model_dump_json(indent=1))
+            parts.append(self.finance_report())
         return "\n\n".join(parts)
 
     def _track(self, res: AnalysisResult, run: AgentRun) -> None:
         res.cost_usd += run.cost_usd
         self.db.add_llm_usage(input_tokens=run.input_tokens, output_tokens=run.output_tokens,
                               web_searches=run.web_searches)
+
+    async def _order(self, res: AnalysisResult, who: str, task: Callable[[], Awaitable[AgentRun]]):
+        """Поручение подчинённому: при сбое главный повторяет задание один раз."""
+        for attempt in (1, 2):
+            try:
+                run = await task()
+                self._track(res, run)
+                return run.result
+            except AgentError as exc:
+                log.warning("%s: попытка %d не удалась: %s", who, attempt, exc)
+                if attempt == 2:
+                    res.errors.append(f"{who}: {exc}")
+        return None
 
     async def analyze(self, ctx: MatchContext) -> AnalysisResult:
         res = AnalysisResult(ctx=ctx)
@@ -242,69 +306,88 @@ class Engine:
         heads = news.for_match(await self.headlines(), ctx.event.home_team, ctx.event.away_team)
         heads_text = "\n".join(f"- [{h.source}] {h.title}: {h.summary} ({h.link})" for h in heads)
 
-        tasks = [team.news_agent(ctx.brief(), heads_text)]
+        # 1. Новости и зарубежные аналитики — параллельно
+        orders = [self._order(res, "Агент новостей", lambda: team.news_agent(ctx.brief(), heads_text))]
         if settings.web_search_enabled:
-            tasks.append(team.experts_agent(ctx.brief()))
-        outs = await asyncio.gather(*tasks, return_exceptions=True)
-        for name, out in zip(("новости", "эксперты"), outs):
-            if isinstance(out, BaseException):
-                res.errors.append(f"Агент «{name}»: {out}")
-                continue
-            self._track(res, out)
-            if name == "новости":
-                res.news = out.result
-            else:
-                res.experts = out.result
+            orders.append(self._order(res, "Зарубежные аналитики", lambda: team.experts_agent(ctx.brief())))
+        reports = await asyncio.gather(*orders)
+        res.news = reports[0]
+        res.experts = reports[1] if len(reports) > 1 else None
 
-        candidate_text = (
-            f"{SEL_RU[res.candidate]} по среднему кэфу {ctx.market.avg_odds[res.candidate]:.2f}"
-            if res.candidate
-            else "явного кандидата нет; оцени главные риски матча для любой ставки"
+        # 2. Адвокат дьявола видит всё собранное
+        res.devil = await self._order(
+            res, "Адвокат дьявола", lambda: team.devil_agent(self._dossier(ctx, res, for_chief=False))
         )
-        try:
-            run = await team.devil_agent(self._dossier(ctx, res, with_devil=False), candidate_text)
-            self._track(res, run)
-            res.devil = run.result
-        except AgentError as exc:
-            res.errors.append(f"Адвокат дьявола: {exc}")
 
-        try:
-            run = await team.chief_agent(self._dossier(ctx, res, with_devil=True))
-            self._track(res, run)
-            res.verdict = run.result
-        except AgentError as exc:
-            res.errors.append(f"Главный аналитик: {exc}")
+        # 3. Босс не выносит вердикт, пока не выслушал всех
+        missing = [name for name, rep in (
+            ("агент новостей", res.news),
+            ("зарубежные аналитики", res.experts if settings.web_search_enabled else True),
+            ("адвокат дьявола", res.devil),
+        ) if rep is None]
+        if missing:
+            res.skip_reason = "Совет не собран: не доложили " + ", ".join(missing) + ". Вердикт не выносится."
+            return res
+
+        res.verdict = await self._order(
+            res, "Главный аналитик", lambda: team.chief_agent(self._dossier(ctx, res, for_chief=True))
+        )
+        if res.verdict is None:
             res.skip_reason = "Главный аналитик не смог вынести вердикт."
             return res
 
         self._finalize(res)
         return res
 
+    def _build_table(self, res: AnalysisResult) -> None:
+        ctx, v = res.ctx, res.verdict
+        assert v is not None
+        chief = {o.selection: o.probability for o in v.outcomes}
+        final = dict(chief)
+        _normalize(final, ("home", "draw", "away"))
+        _normalize(final, ("over", "under"))
+        for sel in ALL_OUTCOMES:
+            pm = ctx.market.fair.get(sel)
+            odds = ctx.market.avg_odds.get(sel)
+            pf = final.get(sel)
+            if pf is not None and pm is not None:
+                # защита от самоуверенности: не дальше MAX_PROB_DEVIATION от рынка
+                pf = min(max(pf, pm - settings.max_prob_deviation), pm + settings.max_prob_deviation)
+                pf = min(max(pf, 0.01), 0.99)
+            res.table[sel] = OutcomeRow(
+                selection=sel,
+                p_market=pm,
+                p_model=ctx.model.probs[sel] if ctx.model else None,
+                p_chief=chief.get(sel),
+                p_final=pf if pm is not None else None,
+                odds=odds,
+                edge=edge(pf, odds) if (pf is not None and odds and pm is not None) else None,
+            )
+
     def _finalize(self, res: AnalysisResult) -> None:
         ctx, v = res.ctx, res.verdict
         assert v is not None
-        sel = v.selection
-        p_market = ctx.market.fair.get(sel)
-        odds = ctx.market.avg_odds.get(sel)
-        if p_market is None or odds is None:
+        self._build_table(res)
+        row = res.table[v.selection]
+        if row.p_final is None or row.odds is None or row.p_market is None:
             res.skip_reason = "По выбранному исходу нет линии букмекеров."
             return
-        # Защита от самоуверенности: не уходим от рынка дальше, чем на MAX_PROB_DEVIATION.
-        p = min(max(v.probability, p_market - settings.max_prob_deviation), p_market + settings.max_prob_deviation)
-        p = min(max(p, 0.01), 0.99)
-        res.p_final, res.odds_ref = p, odds
-        res.final_edge = edge(p, odds)
+        p, odds = row.p_final, row.odds
+        res.p_final, res.odds_ref, res.final_edge = p, odds, row.edge
         res.min_odds = min_acceptable_odds(p, settings.min_edge)
 
         if v.decision != "bet":
             res.skip_reason = "Главный аналитик рекомендует пропустить матч."
             return
+        if not is_prematch(ctx.event.kickoff):
+            res.skip_reason = "До начала матча слишком мало времени: работаем только в прематче."
+            return
         if not (settings.min_odds <= odds <= settings.max_odds):
             res.skip_reason = f"Коэффициент {odds:.2f} вне рабочего диапазона {settings.min_odds}–{settings.max_odds}."
             return
-        if res.final_edge < settings.min_edge:
+        if (row.edge or 0) < settings.min_edge:
             res.skip_reason = (
-                f"Перевес {res.final_edge:+.1%} меньше порога {settings.min_edge:.0%}: ставка не окупает маржу."
+                f"Перевес {row.edge:+.1%} меньше порога {settings.min_edge:.0%}: ставка не окупает маржу."
             )
             return
         if self.db.has_signal(ctx.event.event_id):
@@ -312,7 +395,7 @@ class Engine:
             return
         res.stake = decide_stake(p, odds, self.db.risk_state(), settings)
         if not res.stake.allowed:
-            res.skip_reason = res.stake.reason
+            res.skip_reason = "Финансист: " + res.stake.reason
             return
         res.signal_id = self.db.add_signal(
             event_id=ctx.event.event_id,
@@ -321,13 +404,13 @@ class Engine:
             home=ctx.event.home_team,
             away=ctx.event.away_team,
             kickoff=ctx.event.kickoff.isoformat(),
-            selection=sel,
+            selection=v.selection,
             odds_ref=odds,
             min_odds=round(res.min_odds, 2),
             p_final=round(p, 4),
-            p_market=round(p_market, 4),
-            p_model=round(ctx.model.probs[sel], 4) if ctx.model else None,
-            edge=round(res.final_edge, 4),
+            p_market=round(row.p_market, 4),
+            p_model=round(row.p_model, 4) if row.p_model is not None else None,
+            edge=round(row.edge or 0, 4),
             stake=res.stake.stake,
             confidence=v.confidence,
             reasoning=v.reasoning,
@@ -362,6 +445,8 @@ class Engine:
             ctx = next((m for m in self.matches if m.idx == idx), None)
             if ctx is None:
                 raise ValueError("Нет матча с таким номером. Обновите список: /matches")
+            if not is_prematch(ctx.event.kickoff):
+                raise ValueError("Матч скоро начнётся или уже идёт. Работаем только в прематче.")
             if self.db.analyses_today() >= settings.max_llm_analyses_per_day:
                 raise ValueError(
                     f"Дневной лимит разборов ({settings.max_llm_analyses_per_day}) исчерпан. "
@@ -369,8 +454,9 @@ class Engine:
                 )
             return await self.analyze(ctx)
 
-    # ---------- расчёт результатов ----------
+    # ---------- проверка исходов (аналитик) и учёт (финансист) ----------
     async def settle(self) -> list[Signal]:
+        self.db.expire_undecided()
         now = datetime.now(timezone.utc)
         due = [s for s in self.db.pending() if s.kickoff < now - timedelta(hours=2, minutes=15)]
         if not due:
@@ -388,16 +474,13 @@ class Engine:
         settled = []
         for s in due:
             same_day = [r for r in finished if abs((r.utc_date - s.kickoff).total_seconds()) < 36 * 3600]
-            res = None
-            for r in same_day:
-                if best_match(s.home, [r.home]) and best_match(s.away, [r.away]):
-                    res = r
-                    break
+            res = next(
+                (r for r in same_day if best_match(s.home, [r.home]) and best_match(s.away, [r.away])), None
+            )
             if res is None:
                 if now - s.kickoff > timedelta(days=5):
-                    self.db.settle(s.id, "void", "нет данных", 0.0)
-                    s.status, s.score, s.profit = "void", "нет данных", 0.0
-                    settled.append(s)
+                    self.db.settle(s.id, "void", "нет данных", 0.0, 0.0)
+                    settled.append(self.db.signal(s.id))
                 continue
             hg, ag = res.home_goals, res.away_goals
             won = {
@@ -407,9 +490,10 @@ class Engine:
                 "over": hg + ag > 2.5,
                 "under": hg + ag < 2.5,
             }[s.selection]
-            profit = s.stake * (s.odds_ref - 1) if won else -s.stake
-            status = "won" if won else "lost"
-            self.db.settle(s.id, status, f"{hg}:{ag}", profit)
-            s.status, s.score, s.profit = status, f"{hg}:{ag}", profit
-            settled.append(s)
-        return settled
+            paper = s.stake * (s.min_odds - 1) if won else -s.stake
+            real = 0.0
+            if s.placed and s.actual_stake:
+                real = s.actual_stake * ((s.actual_odds or s.min_odds) - 1) if won else -s.actual_stake
+            self.db.settle(s.id, "won" if won else "lost", f"{hg}:{ag}", real, paper)
+            settled.append(self.db.signal(s.id))
+        return [s for s in settled if s is not None]

@@ -74,6 +74,8 @@ class Settings:
     min_odds: float = field(default_factory=lambda: _float("MIN_ODDS", 1.40))
     max_odds: float = field(default_factory=lambda: _float("MAX_ODDS", 4.50))
     lookahead_hours: int = field(default_factory=lambda: _int("LOOKAHEAD_HOURS", 48))
+    # только прематч: матчи, до начала которых меньше этого времени, не разбираем
+    min_minutes_before_kickoff: int = field(default_factory=lambda: _int("MIN_MINUTES_BEFORE_KICKOFF", 60))
 
     # --- банкролл и лимиты (финансист) ---
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))

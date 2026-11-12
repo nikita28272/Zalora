@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Callable, Generic, TypeVar
 
 import anthropic
 from pydantic import BaseModel, ValidationError
@@ -77,7 +77,9 @@ async def run_agent(
     schema: type[T],
     web_search: bool = False,
     max_searches: int = 3,
+    validate: Callable[[T], str | None] | None = None,
 ) -> AgentRun[T]:
+    """validate(result) возвращает текст замечания, если отчёт нужно доработать, иначе None."""
     submit_tool = {
         "name": SUBMIT_TOOL,
         "description": "Отправить итоговый отчёт главному аналитику. Вызывается ровно один раз, в конце работы.",
@@ -130,15 +132,31 @@ async def run_agent(
         if resp.stop_reason == "refusal":
             raise AgentError("Модель отказалась отвечать на этот запрос")
 
-        for block in resp.content:
-            if block.type == "tool_use" and block.name == SUBMIT_TOOL:
-                try:
-                    result = schema.model_validate(block.input)
-                except ValidationError as exc:
-                    raise AgentError(f"Агент вернул отчёт не по схеме: {exc}") from exc
-                return AgentRun(result, in_tok, out_tok, searches, model)
-
+        submit = next(
+            (b for b in resp.content if b.type == "tool_use" and b.name == SUBMIT_TOOL), None
+        )
         messages.append({"role": "assistant", "content": resp.content})
+
+        if submit is not None:
+            try:
+                result = schema.model_validate(submit.input)
+                problem = validate(result) if validate else None
+            except ValidationError as exc:
+                problem = f"Отчёт не соответствует схеме: {exc}"
+            if problem is None:
+                return AgentRun(result, in_tok, out_tok, searches, model)
+            # Возвращаем отчёт на доработку
+            messages.append({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": submit.id,
+                    "is_error": True,
+                    "content": f"Отчёт не принят: {problem} Исправь и отправь submit_report заново.",
+                }],
+            })
+            continue
+
         if resp.stop_reason == "pause_turn":
             continue  # сервер продолжит поиск с того же места
         messages.append(

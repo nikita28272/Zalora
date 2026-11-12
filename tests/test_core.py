@@ -130,7 +130,7 @@ def test_no_false_match():
 
 
 # ---------- журнал ----------
-def test_db_signals_and_streak():
+def test_db_signals_and_streak_count_only_placed():
     db = DB(":memory:")
     base = dict(league_code="PL", league_name="АПЛ", home="A", away="B",
                 kickoff=NOW.isoformat(), odds_ref=2.0, min_odds=1.9, p_final=0.55, p_market=0.5,
@@ -138,10 +138,16 @@ def test_db_signals_and_streak():
     s1 = db.add_signal(event_id="e1", selection="home", **base)
     assert db.add_signal(event_id="e1", selection="home", **base) is None  # дубль
     s2 = db.add_signal(event_id="e2", selection="away", **base)
+    s3 = db.add_signal(event_id="e3", selection="away", **base)
+    db.decide(s1, placed=True, odds=2.0, stake=100)
+    db.decide(s2, placed=True, odds=2.1, stake=200)
+    db.decide(s3, placed=False)
+    assert db.in_play() == (2, 300)
     start = db.bankroll()
-    db.settle(s1, "lost", "0:1", -100)
-    db.settle(s2, "lost", "2:0", -100)
-    assert db.bankroll() == start - 200
+    db.settle(s1, "lost", "0:1", -100, -100)
+    db.settle(s2, "lost", "2:0", -200, -100)
+    db.settle(s3, "lost", "2:0", 0, -100)  # не ставили: банк не меняется
+    assert db.bankroll() == start - 300
     assert db.risk_state().losing_streak == 2
     db.reset_streak()
     assert db.risk_state().losing_streak == 0
@@ -154,7 +160,8 @@ class FakeMessages:
         self.calls = []
 
     async def create(self, **kwargs):
-        self.calls.append(kwargs)
+        # копия на момент вызова: настоящий SDK сериализует запрос сразу
+        self.calls.append(dict(kwargs, messages=list(kwargs["messages"])))
         return self.responses.pop(0)
 
 
@@ -165,12 +172,13 @@ def _resp(stop, content):
 
 
 def test_run_agent_handles_pause_and_nudge(monkeypatch):
-    report = {"counter_arguments": ["a"], "hidden_risks": [], "severity": "low",
-              "recommend_skip": False, "summary": "s"}
+    report = {"outcomes": [{"selection": o, "stance": "against", "comment": "c"}
+                           for o in ("home", "draw", "away", "over", "under")],
+              "hidden_risks": [], "severity": "low", "summary": "s"}
     msgs = FakeMessages([
         _resp("pause_turn", [SimpleNamespace(type="text", text="ищу")]),
         _resp("end_turn", [SimpleNamespace(type="text", text="готово")]),
-        _resp("tool_use", [SimpleNamespace(type="tool_use", name="submit_report", input=report)]),
+        _resp("tool_use", [SimpleNamespace(type="tool_use", id="t1", name="submit_report", input=report)]),
     ])
     fake = SimpleNamespace(messages=msgs, beta=SimpleNamespace(messages=msgs))
     monkeypatch.setattr(llm, "_client", fake)
@@ -192,3 +200,21 @@ def test_run_agent_refusal(monkeypatch):
     with pytest.raises(llm.AgentError):
         asyncio.run(llm.run_agent(model="claude-opus-5-5", effort="low", system="s", prompt="p",
                                   schema=ChiefVerdict))
+
+
+def test_run_agent_sends_incomplete_report_back(monkeypatch):
+    from bot.agents.team import _outcomes_complete
+    partial = {"outcomes": [{"selection": "home", "stance": "against", "comment": "c"}],
+               "hidden_risks": [], "severity": "low", "summary": "s"}
+    full = dict(partial, outcomes=[{"selection": o, "stance": "neutral", "comment": "c"}
+                                   for o in ("home", "draw", "away", "over", "under")])
+    msgs = FakeMessages([
+        _resp("tool_use", [SimpleNamespace(type="tool_use", id="t1", name="submit_report", input=partial)]),
+        _resp("tool_use", [SimpleNamespace(type="tool_use", id="t2", name="submit_report", input=full)]),
+    ])
+    monkeypatch.setattr(llm, "_client", SimpleNamespace(messages=msgs, beta=SimpleNamespace(messages=msgs)))
+    run = asyncio.run(llm.run_agent(model="claude-opus-5-5", effort="low", system="s", prompt="p",
+                                    schema=DevilReport, validate=_outcomes_complete))
+    assert len(run.result.outcomes) == 5
+    back = msgs.calls[1]["messages"][-1]["content"][0]
+    assert back["type"] == "tool_result" and back["is_error"] and back["tool_use_id"] == "t1"

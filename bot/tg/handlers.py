@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import logging
+import re
+from datetime import datetime, timezone
 
-from aiogram import Bot, Router
+from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from ..agents.llm import PRICES, WEB_SEARCH_PRICE
 from ..config import settings
-from ..db import DB
-from ..pipeline import Engine
+from ..db import DB, month_start_utc
+from ..pipeline import AnalysisResult, Engine
 from . import formatting as fmt
 
 log = logging.getLogger(__name__)
@@ -34,9 +36,39 @@ def chunks(text: str, limit: int = TG_LIMIT) -> list[str]:
     return parts
 
 
-async def send_long(bot: Bot, chat_id: int, text: str) -> None:
-    for part in chunks(text):
-        await bot.send_message(chat_id, part, disable_web_page_preview=True)
+def decision_keyboard(signal_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Поставил", callback_data=f"bet:{signal_id}:placed"),
+        InlineKeyboardButton(text="❌ Не ставил", callback_data=f"bet:{signal_id}:skip"),
+    ]])
+
+
+async def send_long(bot: Bot, chat_id: int, text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
+    parts = chunks(text)
+    for i, part in enumerate(parts):
+        markup = keyboard if i == len(parts) - 1 else None  # кнопки под последней частью
+        await bot.send_message(chat_id, part, disable_web_page_preview=True, reply_markup=markup)
+
+
+async def send_analysis(bot: Bot, chat_id: int, res: AnalysisResult) -> None:
+    kb = decision_keyboard(res.signal_id) if res.signal_id else None
+    await send_long(bot, chat_id, fmt.analysis(res), kb)
+
+
+def parse_bet_input(text: str) -> tuple[float, float | None] | None:
+    """«2.15», «2,15 500» или «2.15 1 000» -> (коэффициент, сумма | None)."""
+    m = re.match(r"^\s*(\d+(?:\.\d+)?)\s*(.*)$", text.strip().replace(",", "."))
+    if not m:
+        return None
+    odds = float(m.group(1))
+    if not 1.01 <= odds <= 50:
+        return None
+    rest = re.sub(r"[^\d.]", "", m.group(2))
+    try:
+        stake = float(rest) if rest else None
+    except ValueError:
+        stake = None
+    return odds, stake if stake and stake > 0 else None
 
 
 def build_routers(engine: Engine, db: DB) -> list[Router]:
@@ -73,7 +105,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             log.exception("analyze failed")
             await message.answer(f"Ошибка разбора: {type(exc).__name__}")
             return
-        await send_long(message.bot, message.chat.id, fmt.analysis(res))
+        await send_analysis(message.bot, message.chat.id, res)
 
     @owner.message(Command("scan"))
     async def cmd_scan(message: Message) -> None:
@@ -100,7 +132,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("stats"))
     async def cmd_stats(message: Message) -> None:
-        await message.answer(fmt.stats(db.settled(), db.bankroll()))
+        await message.answer(fmt.stats(db.settled(since=month_start_utc()), db.settled(), db.bankroll()))
 
     @owner.message(Command("bank"))
     async def cmd_bank(message: Message, command: CommandObject) -> None:
@@ -159,6 +191,59 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
     async def cmd_settle(message: Message) -> None:
         await run_settle(message.bot, engine, db, message.chat.id, verbose=True)
 
+    # ---------- отметка «поставил / не ставил» ----------
+    owner.callback_query.filter(lambda c: c.from_user is not None and c.from_user.id == settings.owner_id)
+
+    @owner.callback_query(F.data.startswith("bet:"))
+    async def on_decision(cb: CallbackQuery) -> None:
+        _, sid, action = cb.data.split(":")
+        sig = db.signal(int(sid))
+        if sig is None:
+            await cb.answer("Сигнал не найден", show_alert=True)
+            return
+        if sig.kickoff <= datetime.now(timezone.utc):
+            await cb.answer("Матч уже начался: работаем только в прематче, отметку не принимаю.", show_alert=True)
+            return
+        if action == "skip":
+            db.decide(sig.id, placed=False)
+            db.set("awaiting_bet", None)
+            await cb.answer("Записал: не ставили")
+            await cb.message.answer(
+                f"🧠 Главный: принял, по сигналу #{sig.id} вы не ставите. "
+                "Финансист не трогает банк, аналитик всё равно проверит исход для статистики."
+            )
+            return
+        db.set("awaiting_bet", sig.id)
+        await cb.answer()
+        await cb.message.answer(
+            f"По какому коэффициенту поставили на #{sig.id}? Напишите число, например <code>{sig.min_odds:.2f}</code>.\n"
+            f"Если сумма отличается от рекомендованной ({sig.stake:,.0f}), напишите её вторым числом: "
+            f"<code>{sig.min_odds:.2f} 500</code>".replace(",", " ")
+        )
+
+    @owner.message(F.text & ~F.text.startswith("/"))
+    async def on_bet_input(message: Message) -> None:
+        sid = db.get("awaiting_bet")
+        if not sid:
+            await message.answer("Команды: /help")
+            return
+        sig = db.signal(int(sid))
+        if sig is None:
+            db.set("awaiting_bet", None)
+            return
+        if sig.kickoff <= datetime.now(timezone.utc):
+            db.set("awaiting_bet", None)
+            await message.answer("Матч уже начался: работаем только в прематче, отметку не принимаю.")
+            return
+        parsed = parse_bet_input(message.text or "")
+        if parsed is None:
+            await message.answer("Не понял. Напишите коэффициент числом, например 2.15 (или «2.15 500» с суммой).")
+            return
+        odds, stake = parsed
+        db.decide(sig.id, placed=True, odds=odds, stake=stake or sig.stake)
+        db.set("awaiting_bet", None)
+        await message.answer(fmt.placed_confirmation(db.signal(sig.id), db.bankroll(), db.in_play()))
+
     # Всем остальным: подсказка, как стать владельцем.
     public = Router(name="public")
 
@@ -185,7 +270,7 @@ async def run_scan(bot: Bot, engine: Engine, chat_id: int, verbose: bool = False
     signals = [r for r in results if r.signal_id]
     for r in results:
         if r.signal_id or verbose:
-            await send_long(bot, chat_id, fmt.analysis(r))
+            await send_analysis(bot, chat_id, r)
     cost = sum(r.cost_usd for r in results)
     summary = (
         f"Скан завершён: матчей в линии {len(matches)}, разобрано агентами {len(results)}, "
@@ -210,6 +295,4 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
         if verbose:
             await bot.send_message(chat_id, "Нет завершённых матчей для расчёта.")
         return
-    text = "<b>Итоги сигналов</b>\n" + "\n".join(fmt.signal_line(s) for s in settled)
-    text += f"\n\nБанк: {db.bankroll():,.0f}".replace(",", " ")
-    await send_long(bot, chat_id, text)
+    await send_long(bot, chat_id, fmt.settle_report(settled, db.bankroll()))
