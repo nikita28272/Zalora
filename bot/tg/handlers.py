@@ -8,7 +8,14 @@ from datetime import datetime, timezone
 
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 
 from ..config import settings
 from ..db import DB, month_start_utc
@@ -126,13 +133,80 @@ def dossier_keyboard(items: list[int]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+# ---------- кнопки ----------
+BTN_CANDIDATES = "📋 Кандидаты"
+BTN_MATCHES = "📅 Матчи"
+BTN_SIGNALS = "📌 Мои сигналы"
+BTN_STATS = "📊 Статистика"
+BTN_BANK = "💰 Банк"
+BTN_CREDITS = "💳 Кредиты"
+BTN_MORE = "⚙️ Ещё"
+
+
+def main_keyboard() -> ReplyKeyboardMarkup:
+    """Постоянное меню внизу экрана вместо обычной клавиатуры."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_CANDIDATES), KeyboardButton(text=BTN_MATCHES)],
+            [KeyboardButton(text=BTN_SIGNALS), KeyboardButton(text=BTN_STATS)],
+            [KeyboardButton(text=BTN_BANK), KeyboardButton(text=BTN_CREDITS)],
+            [KeyboardButton(text=BTN_MORE)],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выберите действие или вставьте /verdict …",
+    )
+
+
+def more_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗂 История", callback_data="menu:history"),
+         InlineKeyboardButton(text="🛡 Лимиты", callback_data="menu:limits")],
+        [InlineKeyboardButton(text="🔄 Проверить итоги", callback_data="menu:settle"),
+         InlineKeyboardButton(text="▶️ Снять паузу", callback_data="menu:resume")],
+        [InlineKeyboardButton(text="🤖 Расход Claude", callback_data="menu:usage"),
+         InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
+    ])
+
+
+def matches_keyboard(matches) -> InlineKeyboardMarkup | None:
+    """Кнопки с номерами матчей: нажал — получил досье (или разбор в режиме api)."""
+    if not matches:
+        return None
+    rows, row = [], []
+    for m in matches[:30]:
+        row.append(InlineKeyboardButton(text=f"📋 {m.idx}", callback_data=f"pick:{m.event.event_id}"[:64]))
+        if len(row) == 5:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def signals_keyboard(pending) -> InlineKeyboardMarkup | None:
+    """У неотмеченных сигналов — кнопки «Поставил / Не ставил»."""
+    rows = [
+        [InlineKeyboardButton(text=f"✅ Поставил #{s.id}", callback_data=f"bet:{s.id}:placed"),
+         InlineKeyboardButton(text=f"❌ Не ставил #{s.id}", callback_data=f"bet:{s.id}:skip")]
+        for s in pending if s.user_decision == "pending"
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def bank_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✏️ Изменить банк", callback_data="bank:edit"),
+    ]])
+
+
 def build_routers(engine: Engine, db: DB) -> list[Router]:
     owner = Router(name="owner")
     owner.message.filter(lambda m: m.from_user is not None and m.from_user.id == settings.owner_id)
 
     @owner.message(Command("start", "help"))
     async def cmd_help(message: Message) -> None:
-        await message.answer(fmt.help_text())
+        await message.answer(fmt.help_text(), reply_markup=main_keyboard())
 
     @owner.message(Command("matches"))
     async def cmd_matches(message: Message) -> None:
@@ -143,17 +217,18 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             log.exception("load_matches failed")
             await message.answer(f"Не удалось загрузить матчи: {type(exc).__name__}")
             return
+        hint = "\nНажмите номер матча, чтобы получить досье." if not settings.api_mode else \
+            "\nНажмите номер матча, чтобы агенты его разобрали."
         await send_long(message.bot, message.chat.id,
-                        fmt.matches_list(matches) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
+                        fmt.matches_list(matches) + "\n" + (hint if matches else "") + "\n\n"
+                        + fmt.odds_footer(engine.last_report, engine.quota()),
+                        matches_keyboard(matches))
 
-    @owner.message(Command("analyze"))
-    async def cmd_analyze(message: Message, command: CommandObject) -> None:
-        if not command.args or not command.args.strip().isdigit():
-            await message.answer("Укажите номер матча из /matches, например: /analyze 3")
-            return
+    async def pick_match(message: Message, idx: int) -> None:
+        """Досье матча (режим «босс в чате») или полный разбор агентами (режим api)."""
         if not settings.api_mode:
             try:
-                num, ctx = await engine.dossier_by_index(int(command.args.strip()))
+                num, ctx = await engine.dossier_by_index(idx)
             except ValueError as exc:
                 await message.answer(str(exc))
                 return
@@ -162,7 +237,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             return
         await message.answer("Агенты работают: новости, эксперты, адвокат дьявола, главный аналитик. Это 1–3 минуты…")
         try:
-            res = await engine.analyze_by_index(int(command.args.strip()))
+            res = await engine.analyze_by_index(idx)
         except ValueError as exc:
             await message.answer(str(exc))
             return
@@ -171,6 +246,13 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await message.answer(f"Ошибка разбора: {type(exc).__name__}")
             return
         await send_analysis(message.bot, message.chat.id, res)
+
+    @owner.message(Command("analyze"))
+    async def cmd_analyze(message: Message, command: CommandObject) -> None:
+        if not command.args or not command.args.strip().isdigit():
+            await message.answer("Нажмите «📅 Матчи» и выберите номер матча кнопкой (или: /analyze 3).")
+            return
+        await pick_match(message, int(command.args.strip()))
 
     @owner.message(Command("scan"))
     async def cmd_scan(message: Message) -> None:
@@ -202,7 +284,8 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await message.answer("Открытых сигналов нет.")
             return
         await send_long(message.bot, message.chat.id,
-                        "<b>Открытые сигналы</b>\n" + "\n".join(fmt.signal_line(s) for s in pending))
+                        "<b>Открытые сигналы</b>\n" + "\n".join(fmt.signal_line(s) for s in pending),
+                        signals_keyboard(pending))
 
     @owner.message(Command("history"))
     async def cmd_history(message: Message) -> None:
@@ -229,10 +312,16 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
                 await message.answer("Укажите сумму числом, например: /bank 15000")
                 return
             db.set_bankroll(value)
+        await show_bank(message)
+
+    async def show_bank(message: Message) -> None:
+        n_play, s_play = db.in_play()
         await message.answer(
-            f"Банк: <b>{db.bankroll():,.0f}</b>\n"
-            f"Максимальная ставка: {settings.max_stake_pct:.0%} банка = {db.bankroll() * settings.max_stake_pct:,.0f}"
-            .replace(",", " ")
+            f"💰 Банк: <b>{db.bankroll():,.0f}</b>\n"
+            f"Максимальная ставка: {settings.max_stake_pct:.0%} банка = {db.bankroll() * settings.max_stake_pct:,.0f}\n"
+            f"В игре: {n_play} ставок на {s_play:,.0f}"
+            .replace(",", " "),
+            reply_markup=bank_keyboard(),
         )
 
     @owner.message(Command("limits"))
@@ -316,6 +405,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
                 "Финансист не трогает банк, аналитик всё равно проверит исход для статистики."
             )
             return
+        db.set("awaiting_bank", None)
         db.set("awaiting_bet", sig.id)
         await cb.answer()
         await cb.message.answer(
@@ -335,11 +425,82 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
         await cb.message.answer(fmt.DOSSIER_HINT)
 
+    # ---------- кнопки постоянного меню ----------
+    @owner.message(F.text == BTN_CANDIDATES)
+    async def b_candidates(message: Message) -> None:
+        await cmd_scan(message)
+
+    @owner.message(F.text == BTN_MATCHES)
+    async def b_matches(message: Message) -> None:
+        await cmd_matches(message)
+
+    @owner.message(F.text == BTN_SIGNALS)
+    async def b_signals(message: Message) -> None:
+        await cmd_signals(message)
+
+    @owner.message(F.text == BTN_STATS)
+    async def b_stats(message: Message) -> None:
+        await cmd_stats(message)
+
+    @owner.message(F.text == BTN_BANK)
+    async def b_bank(message: Message) -> None:
+        await show_bank(message)
+
+    @owner.message(F.text == BTN_CREDITS)
+    async def b_credits(message: Message) -> None:
+        await cmd_credits(message)
+
+    @owner.message(F.text == BTN_MORE)
+    async def b_more(message: Message) -> None:
+        await message.answer("Что открыть?", reply_markup=more_keyboard())
+
+    @owner.callback_query(F.data.startswith("menu:"))
+    async def on_menu(cb: CallbackQuery) -> None:
+        action = cb.data.split(":", 1)[1]
+        await cb.answer()
+        handlers = {
+            "history": cmd_history, "limits": cmd_limits, "settle": cmd_settle,
+            "resume": cmd_resume, "usage": cmd_usage, "help": cmd_help,
+        }
+        handler = handlers.get(action)
+        if handler:
+            await handler(cb.message)
+
+    @owner.callback_query(F.data.startswith("pick:"))
+    async def on_pick(cb: CallbackQuery) -> None:
+        event_id = cb.data.split(":", 1)[1]
+        ctx = next((m for m in engine.matches if m.event.event_id.startswith(event_id)), None)
+        if ctx is None:
+            await cb.answer("Список матчей обновился. Нажмите «📅 Матчи» ещё раз.", show_alert=True)
+            return
+        await cb.answer("Готовлю…")
+        await pick_match(cb.message, ctx.idx)
+
+    @owner.callback_query(F.data == "bank:edit")
+    async def on_bank_edit(cb: CallbackQuery) -> None:
+        db.set("awaiting_bet", None)
+        db.set("awaiting_bank", True)
+        await cb.answer()
+        await cb.message.answer("Напишите новый банк числом, например <code>15000</code>.")
+
     @owner.message(F.text & ~F.text.startswith("/"))
     async def on_bet_input(message: Message) -> None:
+        if db.get("awaiting_bank"):
+            raw = (message.text or "").replace(" ", "").replace(",", ".")
+            try:
+                value = float(raw)
+                if value < 0:
+                    raise ValueError
+            except ValueError:
+                await message.answer("Не понял. Напишите банк числом, например 15000.")
+                return
+            db.set("awaiting_bank", None)
+            db.set_bankroll(value)
+            await show_bank(message)
+            return
         sid = db.get("awaiting_bet")
         if not sid:
-            await message.answer("Команды: /help")
+            await message.answer("Пользуйтесь кнопками меню внизу 👇", reply_markup=main_keyboard())
             return
         sig = db.signal(int(sid))
         if sig is None:

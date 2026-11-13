@@ -263,3 +263,35 @@ def test_parse_verdict_variants():
     assert parse_verdict("7 home 1.5") is None
     assert parse_verdict("7 home") is None
     assert parse_verdict("7 кто-то 0.5") is None
+
+
+# ---------- кнопки ----------
+def test_keyboards():
+    from bot.tg.handlers import (BTN_CANDIDATES, bank_keyboard, main_keyboard, matches_keyboard,
+                                 more_keyboard, signals_keyboard)
+
+    kb = main_keyboard()
+    texts = [b.text for row in kb.keyboard for b in row]
+    assert BTN_CANDIDATES in texts and len(texts) == 7 and kb.is_persistent
+
+    ctxs = []
+    for i in range(7):
+        c = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
+        c.idx, c.event.event_id = i + 1, f"{i:032x}"
+        ctxs.append(c)
+    mk = matches_keyboard(ctxs)
+    assert [len(r) for r in mk.inline_keyboard] == [5, 2]
+    assert all(len(b.callback_data) <= 64 for r in mk.inline_keyboard for b in r)
+    assert matches_keyboard([]) is None
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    res = _result(_ctx(datetime.now(timezone.utc) + timedelta(days=1)), p_home=0.6)
+    engine._finalize(res)
+    sk = signals_keyboard(db.pending())
+    assert sk.inline_keyboard[0][0].callback_data == f"bet:{res.signal_id}:placed"
+    db.decide(res.signal_id, placed=False)
+    assert signals_keyboard(db.pending()) is None  # отмеченные сигналы без кнопок
+
+    assert {b.callback_data for r in more_keyboard().inline_keyboard for b in r} >= {"menu:history", "menu:settle"}
+    assert bank_keyboard().inline_keyboard[0][0].callback_data == "bank:edit"

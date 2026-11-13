@@ -16,7 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import settings
 from .db import DB
 from .pipeline import Engine
-from .tg.handlers import build_routers, run_daily, run_settle
+from .tg.handlers import build_routers, main_keyboard, run_daily, run_settle
 
 COMMANDS = [
     BotCommand(command="matches", description="Ближайшие матчи"),
@@ -71,6 +71,12 @@ async def main() -> None:
         logging.warning("TELEGRAM_OWNER_ID не задан: напишите боту, он пришлёт ваш ID")
 
     logging.info("Бот запущен")
+    if settings.owner_id:
+        try:  # меню появляется сразу после запуска или обновления, без /start
+            await bot.send_message(settings.owner_id, "✅ Бот запущен. Меню — внизу экрана 👇",
+                                   reply_markup=main_keyboard())
+        except Exception as exc:  # noqa: BLE001 — например, владелец ещё не писал боту
+            logging.warning("Не удалось отправить меню владельцу: %s", type(exc).__name__)
     try:
         await dp.start_polling(bot)
     finally:
