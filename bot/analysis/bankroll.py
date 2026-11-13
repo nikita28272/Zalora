@@ -96,3 +96,62 @@ def decide_stake(p: float, odds: float, state: RiskState, cfg: Settings) -> Stak
     if stake <= 0:
         return StakeDecision(False, 0, 0, "Ставка получается слишком маленькой.")
     return StakeDecision(True, stake, pct, f"{cfg.kelly_fraction:g} Келли, потолок {cfg.max_stake_pct:.0%} банка")
+
+
+@dataclass
+class BetPlan:
+    """Разбор финансиста для конкретного кэфа владельца."""
+    p: float  # шанс захода (оценка босса)
+    odds: float
+    ev: float  # перевес: p × кэф − 1
+    stake: float  # рекомендованная сумма (0 — не ставить)
+    pct: float  # доля банка
+    verdict: str  # «ставить» / «не ставить» / «на свой риск»
+    reason: str
+    need_odds: float  # кэф, с которого появляется перевес MIN_EDGE
+    max_own: float  # потолок, если владелец всё же ставит без рекомендации
+
+    @property
+    def win(self) -> float:
+        return round(self.stake * (self.odds - 1), 2)
+
+
+def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
+             by_analysis: bool = False, confidence: str = "medium") -> BetPlan:
+    """Сколько ставить по кэфу владельца.
+
+    Обычный режим: 1/4 Келли от перевеса при ВАШЕМ кэфе, не больше MAX_STAKE_PCT; перевес меньше
+    MIN_EDGE — не ставить. НБА «по анализу»: фиксированная доля по уверенности босса.
+    Лимиты (дневной убыток, серия проигрышей, число ставок) действуют всегда.
+    """
+    ev = edge(p, odds)
+    need = min_acceptable_odds(p, cfg.min_edge)
+    own = round_stake(state.bankroll * cfg.paper_stake_pct)
+    block = risk_block(state, cfg)
+    if block:
+        return BetPlan(p, odds, ev, 0, 0, "не ставить", block, need, 0)
+    if by_analysis:
+        if confidence not in ("medium", "high"):
+            return BetPlan(p, odds, ev, 0, 0, "на свой риск",
+                           "разбор слабый (низкая уверенность)", need, own)
+        pct = min(cfg.nba_stake_pct * (1.5 if confidence == "high" else 1.0), cfg.max_stake_pct)
+        reason = f"по анализу, уверенность {'высокая' if confidence == 'high' else 'средняя'}"
+        if ev < 0:
+            pct /= 2  # по нашей же оценке кэф мал — половина обычной ставки
+            reason += f"; кэф ниже нашей оценки (в плюс от {1 / p:.2f}) — ставку режу вдвое"
+        stake = round_stake(state.bankroll * pct)
+        return BetPlan(p, odds, ev, stake, pct, "ставить" if stake > 0 else "не ставить", reason, need, own)
+    if ev < cfg.min_edge:
+        why = (f"перевес {ev:+.1%} меньше порога {cfg.min_edge:.0%}" if ev >= 0
+               else f"при этом кэфе ставка в минус ({ev:+.1%})")
+        return BetPlan(p, odds, ev, 0, 0, "не ставить", why + f"; нужен кэф от {need:.2f}", need, own)
+    if not cfg.min_odds <= odds <= cfg.max_odds:
+        return BetPlan(p, odds, ev, 0, 0, "не ставить",
+                       f"кэф вне рабочего диапазона {cfg.min_odds}–{cfg.max_odds}", need, own)
+    k = kelly(p, odds)
+    pct = min(k * cfg.kelly_fraction, cfg.max_stake_pct)
+    stake = round_stake(state.bankroll * pct)
+    capped = " (упёрлись в потолок)" if pct >= cfg.max_stake_pct else ""
+    return BetPlan(p, odds, ev, stake, pct, "ставить" if stake > 0 else "не ставить",
+                   f"{cfg.kelly_fraction:g} Келли от перевеса {ev:+.1%}, потолок {cfg.max_stake_pct:.0%} банка"
+                   + capped, need, own)

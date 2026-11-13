@@ -159,7 +159,7 @@ def test_dossier_then_top2_verdict_with_buttons_per_pick():
 
     # «✅ Сделал» по первому исходу: кэф и сумма
     asyncio.run(dp.feed_update(bot, _cb(rows[0][0].callback_data)))
-    assert "По какому коэффициенту" in _texts(session)[-1]
+    assert "Какой кэф в вашей конторе" in _texts(session)[-1]
     asyncio.run(dp.feed_update(bot, _msg("2.20 300")))
     home = db.find_signal(ctx.event.event_id, "home", "boss")
     assert home.placed and home.actual_odds == 2.20 and home.actual_stake == 300
@@ -246,3 +246,52 @@ def test_quiet_hours(monkeypatch):
         assert not handlers._quiet_now(datetime(2026, 1, 1, 3, 0))
     finally:
         object.__setattr__(st, "quiet_hours", old)
+
+
+
+def test_financier_plan_from_owner_odds():
+    from bot.analysis.bankroll import RiskState, plan_bet
+    from bot.config import settings as st
+
+    bot, dp, session, db, engine, ctx = _setup_with_match()
+    num = engine.save_candidate(ctx)
+    top = engine.manual_top(num, [("home", 0.56)], "medium")
+    sid = top.picks[0].signal_id
+
+    asyncio.run(dp.feed_update(bot, _cb(f"bet:{sid}:placed")))
+    asyncio.run(dp.feed_update(bot, _msg("2.10")))  # только кэф — разбор финансиста
+    plan_msg = [m for m in session.sent if isinstance(m, SendMessage)][-1]
+    assert "Финансист" in plan_msg.text and "54%" in plan_msg.text and "Рекомендую" in plan_msg.text
+    buttons = [b for r in plan_msg.reply_markup.inline_keyboard for b in r]
+    ok = buttons[0]
+    assert ok.text.startswith("✅ Ставлю") and db.signal(sid).user_decision == "pending"
+
+    asyncio.run(dp.feed_update(bot, _cb(ok.callback_data)))
+    sig = db.signal(sid)
+    assert sig.placed and sig.actual_odds == 2.10 and sig.actual_stake == float(ok.callback_data.split(":")[4])
+    assert "Финансист записал" in _texts(session)[-1]
+
+    # свой кэф хуже: перевеса нет — не рекомендует, но можно поставить свою сумму
+    state = RiskState(10000, 0, 0, 0)
+    bad = plan_bet(0.56, 1.70, state, st)
+    assert bad.stake == 0 and bad.verdict == "не ставить" and bad.max_own == 50
+    good = plan_bet(0.56, 2.10, state, st)
+    assert good.stake > 0 and good.pct <= st.max_stake_pct and good.win == round(good.stake * 1.1, 2)
+    nba = plan_bet(0.6, 1.80, state, st, by_analysis=True, confidence="high")
+    assert nba.stake == 150 and "высокая" in nba.reason
+    nba_low = plan_bet(0.6, 1.80, state, st, by_analysis=True, confidence="low")
+    assert nba_low.stake == 0 and nba_low.verdict == "на свой риск"
+    blocked = plan_bet(0.6, 2.2, RiskState(10000, 0, 0, 9), st)
+    assert blocked.stake == 0 and "подряд" in blocked.reason
+
+
+def test_financier_own_amount_with_warning():
+    bot, dp, session, db, engine, ctx = _setup_with_match()
+    num = engine.save_candidate(ctx)
+    sid = engine.manual_top(num, [("home", 0.56)], "medium").picks[0].signal_id
+    asyncio.run(dp.feed_update(bot, _cb(f"fin:own:{sid}:2.1")))
+    assert "Какую сумму" in _texts(session)[-1]
+    asyncio.run(dp.feed_update(bot, _msg("1500")))
+    sig = db.signal(sid)
+    assert sig.placed and sig.actual_stake == 1500 and sig.actual_odds == 2.1
+    assert "больше рекомендованной" in _texts(session)[-1]
