@@ -119,6 +119,16 @@ def _parse_prob(raw: str) -> float | None:
 _FIRE = {"fire": 1, "🔥": 1, "огонь": 1, "fire2": 2, "🔥🔥": 2}
 
 
+_LINK = {"link", "связка", "🔗"}
+
+
+def parse_link(args: str) -> tuple[str, bool]:
+    """Снимает из вердикта отметку 🔗 «один сценарий — вместе не брать»."""
+    words = args.split()
+    kept = [w for w in words if w.lower() not in _LINK]
+    return " ".join(kept), len(kept) != len(words)
+
+
 def parse_fire(args: str) -> tuple[str, int]:
     """Снимает из вердикта отметку 🔥: «fire» — на первый исход, «fire2» — на оба."""
     words, n = [], 0
@@ -210,8 +220,15 @@ def plan_keyboard(signal_id: int, odds: float, stake: float) -> InlineKeyboardMa
 def signal_plan(db: DB, sig, odds: float):
     """Разбор финансиста для сигнала по кэфу владельца (от текущего банка и лимитов)."""
     by_analysis = sig.sport == "basketball" and settings.nba_mode == "analysis" and sig.source == "boss"
-    return plan_bet(sig.p_final, odds, db.risk_state(), settings, by_analysis, sig.confidence,
+    plan = plan_bet(sig.p_final, odds, db.risk_state(), settings, by_analysis, sig.confidence,
                     match_in_play=db.match_in_play(sig.event_id, exclude_id=sig.id))
+    partner = db.signal(sig.linked_to) if sig.linked_to else None
+    if partner is not None and partner.placed:  # 🔗 второй исход того же сценария
+        from dataclasses import replace
+        plan = replace(plan, stake=0, pct=0, verdict="не ставить",
+                       reason=f"🔗 вы уже стоите на этом сценарии: #{partner.id} {fmt.sig_short(partner)} — "
+                              "вторая ставка удвоит риск на один исход матча", max_own=0)
+    return plan
 
 
 def check_discipline(db: DB, sig, plan, amount: float, advised: float | None = None) -> str:
@@ -504,14 +521,15 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("verdict"))
     async def cmd_verdict(message: Message, command: CommandObject) -> None:
-        args, fire = parse_fire(command.args or "")
+        args, link = parse_link(command.args or "")
+        args, fire = parse_fire(args)
         parsed = parse_verdict(args)
         if parsed is None:
             await message.answer(VERDICT_USAGE)
             return
         num, picks, conf = parsed
         try:
-            top = engine.manual_top(num, picks, conf, hot={sel for sel, _ in picks[:fire]})
+            top = engine.manual_top(num, picks, conf, hot={sel for sel, _ in picks[:fire]}, link=link)
         except ValueError as exc:
             await message.answer(str(exc))
             return
@@ -601,8 +619,9 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             "<b>Лимиты финансиста</b>\n"
             f"Профиль риска: {RISK_NAMES_RU.get(settings.risk_profile, settings.risk_profile)} — "
             f"{settings.kelly_fraction:g} Келли от свободного банка, предохранитель {settings.max_stake_pct:.0%} на ставку\n"
-            f"Ставок в день: {st.bets_today} из {settings.max_bets_per_day}\n"
-            f"Дневной лимит убытка: {settings.daily_loss_limit_pct:.0%} банка (сегодня {st.profit_today:+,.0f})\n"
+            f"Ставок сегодня: {st.bets_today}"
+            + (f" из {settings.max_bets_per_day}\n" if settings.max_bets_per_day else " (без лимита)\n")
+            + f"Дневной лимит убытка: {settings.daily_loss_limit_pct:.0%} банка (сегодня {st.profit_today:+,.0f})\n"
             f"Проигрышей подряд: {st.losing_streak} (пауза после {settings.stop_after_losses})\n"
             f"Минимальный перевес: {settings.min_edge:.0%}, коэффициенты {settings.min_odds}–{settings.max_odds}\n"
         )

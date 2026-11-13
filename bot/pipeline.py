@@ -82,6 +82,23 @@ def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result
     raise ValueError(f"Неизвестный исход {selection}")
 
 
+def same_scenario(ctx: "MatchContext", a: str, b: str) -> str:
+    """Почему два исхода одного матча — по сути одна ставка (или пусто, если независимы)."""
+    pair = {a, b}
+    for side in ("home", "away"):
+        if pair <= {side, f"ml_{side}", f"hcp_{side}"}:
+            return "победа и фора за одну команду"
+    hcp = next((s for s in pair if s.startswith("hcp_")), None)
+    total = next((s for s in pair if s in ("over", "under")), None)
+    if hcp and total:
+        line = ctx.line(hcp)
+        if line is not None and line > 0 and total == "under":
+            return "фора андердога и «меньше» — оба про вязкую игру с малым счётом"
+        if line is not None and line < 0 and total == "over":
+            return "фора фаворита и «больше» — оба про результативный разгром"
+    return ""
+
+
 def days_until_reset(today, reset_day: int) -> int:
     """Сколько дней (включая сегодня) осталось до обновления месячного лимита кредитов."""
     from datetime import date
@@ -311,6 +328,7 @@ class TopPicks:
     picks: list[Pick]
     replaced: bool = False
     confidence: str = "medium"
+    link_reason: str = ""  # 🔗 оба исхода — один сценарий
 
 
 @dataclass
@@ -547,7 +565,8 @@ class Engine:
             f"  режим: {mode.label}, ставки ×{mode.multiplier:g}"
             + (f" — СТАВКИ ОСТАНОВЛЕНЫ: {mode.stop}" if mode.stop else "") + "\n"
             f"  неделя {st.week_profit:+.0f} (лимит убытка {settings.weekly_loss_limit_pct:.0%} банка)\n"
-            f"  сигналов сегодня {st.bets_today} из {settings.max_bets_per_day}, "
+            f"  ставок сегодня {st.bets_today}"
+            + (f" из {settings.max_bets_per_day}" if settings.max_bets_per_day else " (без лимита)") + ", "
             f"результат дня {st.profit_today:+.0f} (лимит убытка {settings.daily_loss_limit_pct:.0%} банка)\n"
             f"  проигрышей подряд {st.losing_streak} (пауза после {settings.stop_after_losses})\n"
             f"  профиль риска: {RISK_NAMES_RU.get(settings.risk_profile, settings.risk_profile)} "
@@ -900,7 +919,7 @@ class Engine:
             return self.save_candidate(ctx), ctx
 
     def manual_top(self, num: int, picks: list[tuple[str, float]], confidence: str = "medium",
-                   hot: set[str] | None = None) -> TopPicks:
+                   hot: set[str] | None = None, link: bool = False) -> TopPicks:
         """Вердикт босса из чата: два лучших исхода матча -> финансист -> два прогноза в журнал.
 
         Прогнозы записываются всегда, даже без перевеса: так статистика честно покажет, как работают
@@ -1030,7 +1049,14 @@ class Engine:
                 pick_rank=rank,
                 hot=1 if pk.hot else 0,
             )
-        return TopPicks(ctx=ctx, num=num, picks=made, replaced=bool(old), confidence=confidence)
+        link_reason = ""
+        if len(made) == 2:
+            link_reason = same_scenario(ctx, made[0].selection, made[1].selection) or (
+                "босс: исходы зависят от одного сценария матча" if link else "")
+            if link_reason and made[0].signal_id and made[1].signal_id:
+                self.db.link(made[0].signal_id, made[1].signal_id)
+        return TopPicks(ctx=ctx, num=num, picks=made, replaced=bool(old), confidence=confidence,
+                        link_reason=link_reason)
 
     # ---------- отбор матчей для разбора ----------
     def analyzed_events(self) -> set[str]:

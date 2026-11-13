@@ -190,7 +190,7 @@ class Settings:
     max_match_pct: float = field(default_factory=lambda: _profiled("MAX_MATCH_PCT", "match"))  # на один матч
     # сумма бумажного учёта (и потолок совета) для прогнозов босса без перевеса
     paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
-    max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 3))
+    max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 0))  # 0 — без лимита
     daily_loss_limit_pct: float = field(default_factory=lambda: _float("DAILY_LOSS_LIMIT_PCT", 0.05))
     stop_after_losses: int = field(default_factory=lambda: _int("STOP_AFTER_LOSSES", 4))
 

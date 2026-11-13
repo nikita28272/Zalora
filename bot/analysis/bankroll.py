@@ -4,7 +4,7 @@
 * ставка по дробному критерию Келли (доля — по профилю риска) от свободного банка
   (банк минус открытые ставки); в НБА «по анализу» — от уверенности и вероятности;
 * предохранитель MAX_STAKE_PCT на одну ставку (умеренный профиль — 5%);
-* не больше MAX_BETS_PER_DAY ставок в день;
+* число ставок в день не ограничено (MAX_BETS_PER_DAY=0), есть лимит денег в игре;
 * стоп на день, если дневной убыток превысил DAILY_LOSS_LIMIT_PCT;
 * пауза после серии из STOP_AFTER_LOSSES проигрышей подряд.
 """
@@ -101,7 +101,7 @@ def risk_block(state: RiskState, cfg: Settings) -> str | None:
     """Причина, по которой финансист сегодня не даёт ставить (лимиты), или None."""
     if state.bankroll <= 0:
         return "Банк пуст. Задайте его командой /bank."
-    if state.bets_today >= cfg.max_bets_per_day:
+    if cfg.max_bets_per_day and state.bets_today >= cfg.max_bets_per_day:
         return f"Лимит {cfg.max_bets_per_day} ставок в день исчерпан."
     if state.profit_today <= -cfg.daily_loss_limit_pct * state.bankroll:
         return "Дневной лимит убытка достигнут. Сегодня ставок больше нет."

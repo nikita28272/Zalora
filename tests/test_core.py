@@ -88,7 +88,7 @@ def test_stake_capped_and_limits():
     cfg = Settings()
     ok = decide_stake(0.6, 2.2, RiskState(10000, 0, 0, 0), cfg)
     assert ok.allowed and ok.stake <= 10000 * cfg.max_stake_pct
-    assert not decide_stake(0.6, 2.2, RiskState(10000, cfg.max_bets_per_day, 0, 0), cfg).allowed
+    assert decide_stake(0.6, 2.2, RiskState(10000, 25, 0, 0), cfg).allowed  # лимита ставок в день нет
     assert not decide_stake(0.6, 2.2, RiskState(10000, 0, -10000, 0), cfg).allowed
     assert not decide_stake(0.6, 2.2, RiskState(10000, 0, 0, cfg.stop_after_losses), cfg).allowed
     assert not decide_stake(0.4, 2.2, RiskState(10000, 0, 0, 0), cfg).allowed

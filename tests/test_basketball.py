@@ -308,3 +308,43 @@ def test_daily_picks_two_hockey_two_nba():
     kb = daily_keyboard(picks, 7)
     flat = [b.callback_data for r in kb.inline_keyboard for b in r]
     assert sum(c.startswith("pick:") for c in flat) == 4 and "menu:all" in flat
+
+
+# ---------- 🔗 один сценарий ----------
+def test_same_scenario_pairs_and_link_on_verdict():
+    from bot.pipeline import same_scenario
+    from bot.tg.handlers import parse_link
+
+    ctx = _nba_ctx("lnk", NOW + timedelta(days=1), None)  # хозяева фавориты: Ф1(-5.5), Ф2(+5.5)
+    assert "андердога" in same_scenario(ctx, "hcp_away", "under")
+    assert "фаворита" in same_scenario(ctx, "hcp_home", "over")
+    assert "одну команду" in same_scenario(ctx, "ml_home", "hcp_home")
+    assert same_scenario(ctx, "hcp_home", "under") == ""  # фаворит с форой и «меньше» — не одно и то же
+    assert parse_link("9 hcp_home 0.545 under 0.53 low link") == ("9 hcp_home 0.545 under 0.53 low", True)
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    num = engine.save_candidate(ctx)
+    top = engine.manual_top(num, [("hcp_away", 0.53), ("under", 0.53)], "low")
+    assert top.link_reason and "один сценарий" in fmt.top_picks(top, db.bankroll())
+    a, b = (db.signal(p.signal_id) for p in top.picks)
+    assert a.linked_to == b.id and b.linked_to == a.id
+    assert f"🔗#{b.id}" in fmt.signal_line(a)
+    # босс может связать вручную
+    top2 = engine.manual_top(num, [("hcp_home", 0.53), ("under", 0.53)], "low", link=True)
+    assert top2.link_reason.startswith("босс")
+
+
+def test_financier_blocks_second_bet_of_same_scenario():
+    from bot.tg.handlers import signal_plan
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _nba_ctx("lnk2", NOW + timedelta(days=1), None)
+    num = engine.save_candidate(ctx)
+    top = engine.manual_top(num, [("hcp_away", 0.55), ("under", 0.55)], "medium")
+    first, second = (db.signal(p.signal_id) for p in top.picks)
+    assert signal_plan(db, second, 1.9).stake > 0
+    db.decide(first.id, placed=True, odds=1.9, stake=50)
+    plan = signal_plan(db, db.signal(second.id), 1.9)
+    assert plan.stake == 0 and "🔗 вы уже стоите на этом сценарии" in plan.reason

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS {name} (
     source TEXT NOT NULL DEFAULT 'boss',
     pick_rank INTEGER,
     hot INTEGER NOT NULL DEFAULT 0,
+    linked_to INTEGER,
     UNIQUE(event_id, selection, source)
 );
 """
@@ -85,6 +86,7 @@ _MIGRATIONS = {
     "line": "REAL",
     "pick_rank": "INTEGER",
     "hot": "INTEGER NOT NULL DEFAULT 0",
+    "linked_to": "INTEGER",
 }
 
 
@@ -122,6 +124,7 @@ class Signal:
     source: str = "boss"  # boss — прогноз босса (/verdict), user — ставка владельца без вердикта
     pick_rank: int | None = None  # место в топ-2 босса по матчу (1 или 2)
     hot: int = 0  # 🔥 — босс советует обратить внимание
+    linked_to: int | None = None  # 🔗 второй исход того же сценария (вместе не брать)
 
     @property
     def placed(self) -> bool:
@@ -389,6 +392,11 @@ class DB:
             (event_id,),
         )
         return [self._row(r) for r in rows]
+
+    def link(self, a: int, b: int) -> None:
+        self.conn.execute("UPDATE signals SET linked_to = ? WHERE id = ?", (b, a))
+        self.conn.execute("UPDATE signals SET linked_to = ? WHERE id = ?", (a, b))
+        self.conn.commit()
 
     def set_hot(self, signal_id: int, hot: bool) -> None:
         self.conn.execute("UPDATE signals SET hot = ? WHERE id = ?", (1 if hot else 0, signal_id))

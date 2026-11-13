@@ -359,7 +359,7 @@ def signal_line(s: Signal) -> str:
         tail += f", {s.profit:+,.0f}".replace(",", " ") if s.placed else " (вы не ставили)"
     elif s.status == "void":
         tail = " → возврат"
-    fire = "🔥" if s.hot else ""
+    fire = ("🔥" if s.hot else "") + (f"🔗#{s.linked_to}" if s.linked_to else "")
     return (
         f"{status}{fire} #{s.id} {_sig_emoji(s)} {local(s.kickoff):%d.%m %H:%M} {escape(s.home)} — {escape(s.away)}: "
         f"<b>{escape(_sig_short(s))}</b> {bet}{tail}"
@@ -404,7 +404,8 @@ def finance_status(st, cfg, discipline: tuple[int, int, list[str]] | None = None
         f"(все ставки — до {cfg.max_exposure_pct:.0%}, один матч — до {cfg.max_match_pct:.0%} банка)",
         f"Сегодня: {_money_signed(st.profit_today)} (лимит −{_money(cfg.daily_loss_limit_pct * st.bankroll)}), "
         f"неделя: {_money_signed(st.week_profit)} (лимит −{_money(cfg.weekly_loss_limit_pct * st.bankroll)})",
-        f"Ставок сегодня: {st.bets_today} из {cfg.max_bets_per_day}; проигрышей подряд: {st.losing_streak}",
+        f"Ставок сегодня: {st.bets_today}" + (f" из {cfg.max_bets_per_day}" if cfg.max_bets_per_day else "")
+        + f"; проигрышей подряд: {st.losing_streak}",
     ]
     if block:
         lines.append(f"⛔ Сейчас ставить нельзя: {escape(block)}")
@@ -659,6 +660,9 @@ def top_picks(top: TopPicks, bank: float) -> str:
             lines.append(f"   💰 {_money(pk.stake)} — {escape(pk.note)}; брать по кэфу не ниже {pk.min_odds:.2f}")
         else:
             lines.append(f"   💰 {escape(pk.note)} (≈{_money(pk.stake)}); в плюс только по кэфу от {pk.min_odds:.2f}")
+    if top.link_reason:
+        lines += ["", f"🔗 <b>Исходы 1 и 2 — один сценарий</b> ({escape(top.link_reason)}): вместе не брать, "
+                      "выберите один. Финансист не даст поставить второй, если первый уже сделан."]
     if not any(pk.positive for pk in top.picks):
         lines += ["", "⚠️ Разбор слабый: это лучшие из исходов, а не рекомендация ставить." if by_analysis
                   else "⚠️ Перевеса нет ни в одном исходе: это лучшие из имеющихся, а не рекомендация ставить."]
