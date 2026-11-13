@@ -85,7 +85,7 @@ class MatchContext:
         return (pm + self.model.probs[sel]) / 2
 
     def quant_candidates(self) -> list[tuple[str, float]]:
-        """Исходы с положительным ожиданием по модели+рынку, лучший первым."""
+        """Исходы с перевесом не меньше MIN_EDGE по модели+рынку, лучший первым."""
         if self.model is None:
             return []
         out = []
@@ -96,7 +96,7 @@ class MatchContext:
             if p is None:
                 continue
             ev = edge(p, odds)
-            if ev > 0:
+            if ev >= settings.min_edge:  # мелкий «перевес» — почти всегда шум модели
                 out.append((sel, ev))
         return sorted(out, key=lambda x: x[1], reverse=True)
 

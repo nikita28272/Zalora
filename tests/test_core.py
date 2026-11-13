@@ -258,3 +258,34 @@ def test_sonnet_agent_uses_new_web_search_and_fallback(monkeypatch):
     assert call["model"] == "claude-sonnet-5-5"
     assert call["tools"][0]["type"] == "web_search_20260209"
     assert call["fallbacks"] == "default"
+
+
+def test_poisson_accounts_for_opponent_strength():
+    """Одинаковые счета против сильных соперников ценятся выше, чем против слабых."""
+    d = NOW - timedelta(days=30)
+    res, n = [], 0
+
+    def add(h, a, hg, ag, day):
+        nonlocal n
+        res.append(Result(n, "PL", d + timedelta(days=day), h, a, hg, ag))
+        n += 1
+
+    strong, weak = ["S1", "S2", "S3"], ["W1", "W2", "W3"]
+    # сильные обыгрывают слабых, между собой ничьи
+    day = 0
+    for s in strong:
+        for w in weak:
+            add(s, w, 3, 0, day); add(w, s, 0, 2, day + 1); day += 2
+    for i, s in enumerate(strong):
+        for t in strong[i + 1:]:
+            add(s, t, 1, 1, day); add(t, s, 1, 1, day + 1); day += 2
+    # A и B: одинаковые результаты 1:1, но A играл с сильными, B — со слабыми
+    for s in strong:
+        add("A", s, 1, 1, day); add(s, "A", 1, 1, day + 1); day += 2
+    for w in weak:
+        add("B", w, 1, 1, day); add(w, "B", 1, 1, day + 1); day += 2
+
+    m = PoissonModel(res, now=NOW)
+    assert m.teams["A"].attack > m.teams["B"].attack
+    assert m.teams["A"].defense < m.teams["B"].defense  # меньше — значит надёжнее
+    assert m.predict("A", "B").probs["home"] > m.predict("A", "B").probs["away"]

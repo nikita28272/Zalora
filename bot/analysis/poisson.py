@@ -1,9 +1,13 @@
 """Статистический аналитик: модель Пуассона по результатам текущего сезона.
 
-Для каждой команды считаем силу атаки и обороны отдельно дома и в гостях,
-с затуханием по времени (свежие матчи важнее) и сглаживанием к среднему по
-лиге (чтобы 3 матча не давали экстремальных оценок). По ожидаемым голам
-строим матрицу счетов и получаем вероятности 1X2 и тотала 2.5.
+Для каждой команды оцениваем две силы: атаку и оборону. Считаем их по ВСЕМ матчам
+команды (дома и в гостях вместе), а разницу между домом и выездом учитываем общей
+для лиги поправкой. Так данных на команду вдвое больше, чем при раздельном счёте.
+
+Силы уточняются итеративно с учётом соперников: голы в ворота сильной обороны
+стоят больше, чем в ворота слабой. Свежие матчи весят больше (затухание по времени),
+а небольшое сглаживание к среднему не даёт 3–4 матчам дать экстремальную оценку.
+По ожидаемым голам строим матрицу счетов: вероятности 1X2 и тотала 2.5.
 """
 
 from __future__ import annotations
@@ -15,19 +19,17 @@ from datetime import datetime, timezone
 from ..data.stats import Result
 
 HALF_LIFE_DAYS = 120.0
-PRIOR_GAMES = 4.0  # «виртуальные» средние матчи для сглаживания
+PRIOR_GAMES = 4.0  # «виртуальные» средние матчи; подобрано на симуляции сезонов (лучшая калибровка)
 MIN_GAMES = 4  # меньше — модель не строим
 MAX_GOALS = 10
+ITERATIONS = 40
 
 
 @dataclass
 class TeamStrength:
-    attack_home: float
-    defense_home: float
-    attack_away: float
-    defense_away: float
-    games_home: float
-    games_away: float
+    attack: float  # 1.0 — средняя атака лиги, 1.3 — забивает на 30% больше среднего
+    defense: float  # 1.0 — средняя оборона, 0.7 — пропускает на 30% меньше среднего
+    games: float  # взвешенное число матчей
 
 
 @dataclass
@@ -52,42 +54,46 @@ class PoissonModel:
         self._fit()
 
     def _fit(self) -> None:
-        w_sum = hg = ag = 0.0
-        acc: dict[str, dict[str, float]] = {}
+        games = [(r, _weight(r.utc_date, self.now)) for r in self.results]
+        w_sum = sum(w for _, w in games)
+        self.avg_home = sum(w * r.home_goals for r, w in games) / w_sum if w_sum else 1.5
+        self.avg_away = sum(w * r.away_goals for r, w in games) / w_sum if w_sum else 1.2
 
-        def slot(team: str) -> dict[str, float]:
-            return acc.setdefault(team, {k: 0.0 for k in ("hs", "hc", "hw", "as", "ac", "aw")})
-
-        for r in self.results:
-            w = _weight(r.utc_date, self.now)
-            w_sum += w
-            hg += w * r.home_goals
-            ag += w * r.away_goals
-            h, a = slot(r.home), slot(r.away)
-            h["hs"] += w * r.home_goals
-            h["hc"] += w * r.away_goals
-            h["hw"] += w
-            a["as"] += w * r.away_goals
-            a["ac"] += w * r.home_goals
-            a["aw"] += w
+        # (соперник, вес, забил, пропустил, дома ли) для каждой команды
+        played: dict[str, list[tuple[str, float, int, int, bool]]] = {}
+        for r, w in games:
+            played.setdefault(r.home, []).append((r.away, w, r.home_goals, r.away_goals, True))
+            played.setdefault(r.away, []).append((r.home, w, r.away_goals, r.home_goals, False))
             self.counts.setdefault(r.home, [0, 0])[0] += 1
             self.counts.setdefault(r.away, [0, 0])[1] += 1
 
-        self.avg_home = hg / w_sum if w_sum else 1.5
-        self.avg_away = ag / w_sum if w_sum else 1.2
-
-        self.teams: dict[str, TeamStrength] = {}
+        att = {t: 1.0 for t in played}
+        dfn = {t: 1.0 for t in played}
         k = PRIOR_GAMES
-        for team, s in acc.items():
-            # сглаживание: добавляем k средних матчей лиги
-            self.teams[team] = TeamStrength(
-                attack_home=((s["hs"] + k * self.avg_home) / (s["hw"] + k)) / self.avg_home,
-                defense_home=((s["hc"] + k * self.avg_away) / (s["hw"] + k)) / self.avg_away,
-                attack_away=((s["as"] + k * self.avg_away) / (s["aw"] + k)) / self.avg_away,
-                defense_away=((s["ac"] + k * self.avg_home) / (s["aw"] + k)) / self.avg_home,
-                games_home=s["hw"],
-                games_away=s["aw"],
-            )
+        mean_base = (self.avg_home + self.avg_away) / 2
+        for _ in range(ITERATIONS):
+            for t, rows in played.items():
+                # атака: забитые против ожидаемых с учётом обороны соперника и поля
+                scored = sum(w * gf for _, w, gf, _, _ in rows)
+                expected = sum(
+                    w * (self.avg_home if home else self.avg_away) * dfn[opp] for opp, w, _, _, home in rows
+                )
+                att[t] = (scored + k * mean_base) / (expected + k * mean_base)
+            for t, rows in played.items():
+                conceded = sum(w * ga for _, w, _, ga, _ in rows)
+                expected = sum(
+                    w * (self.avg_away if home else self.avg_home) * att[opp] for opp, w, _, _, home in rows
+                )
+                dfn[t] = (conceded + k * mean_base) / (expected + k * mean_base)
+            # нормировка: средняя команда лиги = 1.0
+            ma = sum(att.values()) / len(att)
+            md = sum(dfn.values()) / len(dfn)
+            att = {t: v / ma for t, v in att.items()}
+            dfn = {t: v / md for t, v in dfn.items()}
+
+        self.teams: dict[str, TeamStrength] = {
+            t: TeamStrength(att[t], dfn[t], sum(w for _, w, _, _, _ in rows)) for t, rows in played.items()
+        }
 
     def predict(self, home: str, away: str) -> ModelOutput | None:
         h, a = self.teams.get(home), self.teams.get(away)
@@ -97,8 +103,8 @@ class PoissonModel:
         n_away = sum(self.counts.get(away, [0, 0]))
         if n_home < MIN_GAMES or n_away < MIN_GAMES:
             return None
-        lam_h = h.attack_home * a.defense_away * self.avg_home
-        lam_a = a.attack_away * h.defense_home * self.avg_away
+        lam_h = self.avg_home * h.attack * a.defense
+        lam_a = self.avg_away * a.attack * h.defense
         return ModelOutput(lam_h, lam_a, outcome_probs(lam_h, lam_a), n_home, n_away)
 
     def form(self, team: str, last: int = 5) -> str:
