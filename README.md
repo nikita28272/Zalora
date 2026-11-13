@@ -60,36 +60,47 @@ Telegram-бот, который ищет ценные ставки (value bets) 
 
 Ключи вводятся только в файл `.env` на сервере. Никому их не пересылайте.
 
-## Запуск на сервере (VPS, Ubuntu)
+## Установка с телефона
+
+Понадобится приложение **Termius** (App Store / Google Play) и сервер (VPS) с Ubuntu.
+
+1. Получите ключи (таблица выше) и сохраните их в заметках.
+2. Арендуйте VPS: Ubuntu 22.04 или 24.04, 1 CPU и 1–2 ГБ памяти достаточно. Хостинг пришлёт IP-адрес и пароль root.
+3. В Termius: **New Host** → Address: IP сервера, Username: `root`, Password: пароль → Connect.
+4. Вставьте в терминал одну строку и нажмите Enter:
+
+   ```bash
+   git clone -b ccr-cf5a84bc-bw3cth https://github.com/nikita28272/Zalora.git && cd Zalora && bash scripts/setup.sh
+   ```
+
+   Скрипт по очереди спросит 4 ключа и банк, сам поставит Docker и запустит бота.
+   Если на сервере нет git: сначала `apt update && apt install -y git`.
+5. Напишите своему боту в Telegram что угодно. Он ответит вашим ID. В Termius выполните:
+
+   ```bash
+   bash scripts/set.sh TELEGRAM_OWNER_ID ВАШ_ID
+   ```
+
+6. Напишите боту `/start`. Готово, телефон и Termius больше не нужны.
+
+Полезные команды (из папки `Zalora`, войти в неё: `cd Zalora`):
+
+| Что | Команда |
+|---|---|
+| Поменять настройку | `bash scripts/set.sh MAX_LLM_ANALYSES_PER_DAY 2` |
+| Посмотреть логи | `docker compose logs --tail 50` |
+| Обновить бота | `git pull && docker compose up -d --build` |
+| Остановить | `docker compose down` |
+
+## Запуск на сервере вручную (VPS, Ubuntu)
 
 ```bash
-# 1. Установить Docker (один раз)
 curl -fsSL https://get.docker.com | sh
-
-# 2. Скачать проект
-git clone https://github.com/nikita28272/Zalora.git
+git clone -b ccr-cf5a84bc-bw3cth https://github.com/nikita28272/Zalora.git
 cd Zalora
-
-# 3. Создать файл с ключами
 cp .env.example .env
 nano .env            # вставить ключи, сохранить: Ctrl+O, Enter, Ctrl+X
-
-# 4. Запустить
 docker compose up -d --build
-
-# Логи
-docker compose logs -f
-```
-
-Узнать свой Telegram ID: оставьте `TELEGRAM_OWNER_ID` пустым, запустите бота и напишите ему.
-Он пришлёт ID. Впишите его в `.env` и перезапустите: `docker compose restart`.
-
-Бот отвечает только владельцу. Остальным он ничего не отвечает.
-
-Обновление после изменений в коде:
-
-```bash
-git pull && docker compose up -d --build
 ```
 
 ### Запуск без Docker (для теста на компьютере)
