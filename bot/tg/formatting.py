@@ -104,6 +104,13 @@ def _sig_emoji(s: Signal) -> str:
     return SPORTS.get(s.sport, SPORTS["football"]).emoji
 
 
+def flag_of(m: MatchContext) -> str:
+    """Метка в списке: 🔎 — модель видит перевес; 🏀 — матч НБА, подходящий для разбора по анализу."""
+    if m.sport.key == "basketball" and settings.nba_mode == "analysis":
+        return " 🏀" if m.factors and m.factors.score >= settings.nba_min_factor else ""
+    return " 🔎" if m.quant_candidates() else ""
+
+
 def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
     if not matches:
         return "Ближайших матчей с линией не найдено."
@@ -119,26 +126,36 @@ def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
         probs = " · ".join(
             f"{m.short(o)} {_pct(f.get(o))}/{_pct(mp.get(o)) if mp else '—'}" for o in shown if o in f
         )
-        flag = " 🔎" if m.quant_candidates() else ""
         lines.append(
-            f"<b>{m.idx}.</b> {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)}{flag}\n    {probs}"
+            f"<b>{m.idx}.</b> {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)}{flag_of(m)}\n    {probs}"
         )
     if len(matches) > limit:
         lines.append(f"…и ещё {len(matches) - limit}")
-    lines += ["", "🔎 — модель видит возможный перевес. Разбор: кнопка «🔍 Анализ»."]
+    lines += ["", "🔎 — модель видит возможный перевес; 🏀 — НБА с перекосом графика. Разбор: «🔍 Анализ»."]
     return "\n".join(lines)
 
 
-def top_block(top: list[tuple[MatchContext, str, float]]) -> str:
+def top_block(top: list[tuple[MatchContext, str, float]], nba: list[MatchContext] | None = None) -> str:
     """Наверху утреннего списка: какие матчи разобрать, чтобы не тратить лимит Claude впустую."""
     if not top:
-        return ("⭐ <b>Стоит разобрать:</b> сегодня нет матчей, где перевес вероятен.\n"
-                "Можно не тратить разбор — или выбрать матч на свой вкус.")
-    lines = ["⭐ <b>Стоит разобрать</b> (самый перспективный исход, оценка до агентов):"]
-    for m, sel, ev in top:
-        lines.append(f"<b>{m.idx}.</b> {m.sport.emoji} {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)} — "
-                     f"{escape(m.short(sel))} {m.market.avg_odds[sel]:.2f}, {ev:+.1%}")
-    lines.append("<i>Остальные матчи — по цифрам без шансов на перевес; разбирать их — тратить лимит.</i>")
+        lines = ["⭐ <b>Стоит разобрать:</b> сегодня нет матчей, где перевес вероятен."]
+    else:
+        lines = ["⭐ <b>Стоит разобрать</b> (самый перспективный исход, оценка до агентов):"]
+        for m, sel, ev in top:
+            lines.append(f"<b>{m.idx}.</b> {m.sport.emoji} {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)}"
+                         f" — {escape(m.short(sel))} {m.market.avg_odds[sel]:.2f}, {ev:+.1%}")
+    if nba is not None and settings.nba_mode == "analysis":
+        lines.append("")
+        if nba:
+            lines.append("🏀 <b>НБА по анализу</b> (сильный перекос графика и усталости):")
+            for m in nba:
+                f = m.factors
+                why = "; ".join(f.reasons) or "перекос по сумме факторов"
+                lines.append(f"<b>{m.idx}.</b> {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)} — график в пользу "
+                             f"{f.side_gen} ({f.score:.1f}): {escape(why)}")
+        else:
+            lines.append("🏀 <b>НБА:</b> сегодня нет матчей с заметным перекосом графика — разбирать нечего.")
+    lines.append("<i>Остальные матчи без зацепки для анализа; разбирать их — тратить лимит.</i>")
     return "\n".join(lines)
 
 
@@ -441,22 +458,34 @@ def top_picks(top: TopPicks, bank: float) -> str:
         + (" (заменил прежний вердикт)" if top.replaced else ""),
         f"{ctx.sport.emoji} {escape(ctx.title)} · {local(ctx.event.kickoff):%d.%m %H:%M}",
     ]
+    by_analysis = ctx.sport.key == "basketball" and settings.nba_mode == "analysis"
     for pk in top.picks:
-        tag = "✅ есть перевес" if pk.positive else "⚪ без перевеса"
+        if by_analysis:
+            tag = "📊 сильный разбор" if pk.positive else "⚪ слабый разбор"
+        else:
+            tag = "✅ есть перевес" if pk.positive else "⚪ без перевеса"
         lines += [
             "",
             f"<b>{pk.rank}. {escape(ctx.short(pk.selection))}</b> — {tag}",
             f"   вероятность {pk.p:.0%} (рынок {pk.p_market:.0%}), кэф {pk.odds:.2f}, перевес {pk.edge:+.1%}",
         ]
+        if by_analysis:
+            lines.append(f"   💰 {_money(pk.stake)} — {escape(pk.note)}")
+            if pk.p * pk.odds < 1:
+                lines.append(f"   ⚠️ по нашей же оценке кэф мал: в плюс только от {pk.min_odds:.2f}")
+            continue
         if pk.positive:
             lines.append(f"   💰 {_money(pk.stake)} — {escape(pk.note)}; брать по кэфу не ниже {pk.min_odds:.2f}")
         else:
             lines.append(f"   💰 {escape(pk.note)} (≈{_money(pk.stake)}); в плюс только по кэфу от {pk.min_odds:.2f}")
     if not any(pk.positive for pk in top.picks):
-        lines += ["", "⚠️ Перевеса нет ни в одном исходе: это лучшие из имеющихся, а не рекомендация ставить."]
+        lines += ["", "⚠️ Разбор слабый: это лучшие из исходов, а не рекомендация ставить." if by_analysis
+                  else "⚠️ Перевеса нет ни в одном исходе: это лучшие из имеющихся, а не рекомендация ставить."]
     lines += ["", f"Уверенность: {LEVEL_RU.get(top.confidence, top.confidence)}. Банк: {_money(bank)}.",
               "Отметьте по каждому исходу 👇 Итог пришлю на следующий день.",
-              "🥅 Перед матчем можно сделать позднюю проверку (вратари/составы) — бот сам напомнит."]
+              "🥅 Перед матчем можно сделать позднюю проверку ("
+              + {"hockey": "вратари", "basketball": "травмы и составы"}.get(ctx.sport.key, "составы")
+              + ") — бот сам напомнит."]
     return "\n".join(lines)
 
 

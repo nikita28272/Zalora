@@ -167,12 +167,19 @@ def test_nba_dossier_verdict_and_settlement():
 
     num = engine.save_candidate(ctx)
     text = engine.dossier(ctx, num)
-    assert "🏀 Баскетбол" in text and "ожидаемые очки" in text and "injury report" in text
+    assert "🏀 Баскетбол" in text and "ожидаемые очки" in text and "РЕЖИМ НБА: ПО АНАЛИЗУ" in text
+    assert "ФАКТОРЫ ГРАФИКА" in text and "мораль" in text
     assert "hcp_home (Ф1(-5.5))" in text and "over (ТБ225.5)" in text
     assert len(fmt.dossier_message(text)) < 4000
 
-    top = engine.manual_top(num, [("hcp_home", 0.52), ("over", 0.5)], "low")
-    assert [p.selection for p in top.picks][0] in ("hcp_home", "over")
+    # по анализу: средняя уверенность — фиксированный 1% банка, даже без перевеса над линией
+    top = engine.manual_top(num, [("hcp_home", 0.52), ("over", 0.5)], "medium")
+    assert all(p.positive for p in top.picks) and all(p.stake == 100 for p in top.picks)
+    msg = fmt.top_picks(top, db.bankroll())
+    assert "📊 сильный разбор" in msg and "по анализу" in msg
+    low = engine.manual_top(num, [("hcp_home", 0.52)], "low")
+    assert not low.picks[0].positive and "слабый разбор" in fmt.top_picks(low, db.bankroll())
+    top = engine.manual_top(num, [("hcp_home", 0.52), ("over", 0.5)], "medium")
     assert "отчёт о травмах" in engine.late_check(num)
 
     db.conn.execute("UPDATE signals SET kickoff = ?", ((NOW - timedelta(hours=4)).isoformat(),))
@@ -217,3 +224,49 @@ def test_espn_range_rejected_falls_back_to_days_and_cdn():
                         "awayTeam": {"teamCity": "Utah", "teamName": "Jazz", "score": 115}})
     assert g.home == "LA Clippers" and g.decided == "OT" and g.final == (118, 115)
     assert parse_cdn_game({"gameId": "0012600001", "gameStatus": 3}) is None  # предсезонка
+
+
+# ---------- факторы графика и отбор матчей НБА ----------
+def test_schedule_factors_and_selection():
+    from bot.analysis.nba_factors import km, nba_factors, ARENAS
+
+    kickoff = datetime(2026, 11, 14, 0, 30, tzinfo=timezone.utc)
+    rs = [
+        # гости («Клипперс») вчера играли в Майами, до этого 3 выезда подряд
+        Result(1, "NBA", kickoff - timedelta(days=5), "New York Knicks", "LA Clippers", 100, 110, 100, 110),
+        Result(2, "NBA", kickoff - timedelta(days=3), "Atlanta Hawks", "LA Clippers", 100, 105, 100, 105),
+        Result(3, "NBA", kickoff - timedelta(days=2), "Orlando Magic", "LA Clippers", 120, 100, 120, 100),
+        Result(4, "NBA", kickoff - timedelta(days=1), "Miami Heat", "LA Clippers", 115, 99, 115, 99),
+        # хозяева («Денвер») три дня отдыхали дома
+        Result(5, "NBA", kickoff - timedelta(days=4), "Denver Nuggets", "Utah Jazz", 120, 101, 120, 101),
+    ]
+    f = nba_factors(rs, "Denver Nuggets", "LA Clippers", kickoff, model_margin=6.0)
+    away, home = f.away, f.home
+    assert away.rest_days == 0 and away.road_game == 5 and away.altitude and away.games_4 >= 3
+    assert away.travel_km > 2500 and away.streak == "L2"
+    assert home.rest_days == 3 and home.home_game == 2
+    assert f.side == "хозяева" and f.score >= 5 and "back-to-back" in f.reasons[0]
+    assert "ФАКТОРЫ ГРАФИКА" in f.text() and "игра на высоте" in f.text()
+    assert 2500 < km(ARENAS["Miami Heat"], ARENAS["Denver Nuggets"]) < 3000
+
+    # отбор: берём только матчи с сильным перекосом
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx_a = _nba_ctx("a", NOW + timedelta(days=1), f)
+    weak = nba_factors(rs, "Utah Jazz", "Denver Nuggets", kickoff)  # оба отдохнули
+    ctx_b = _nba_ctx("b", NOW + timedelta(days=1), weak)
+    assert weak.score < 2
+    assert [m.event.event_id for m in engine.nba_top([ctx_a, ctx_b])] == ["a"]
+    text = fmt.top_block([], engine.nba_top([ctx_a, ctx_b]))
+    assert "НБА по анализу" in text and "график в пользу хозяев" in text
+
+
+def _nba_ctx(eid, kickoff, factors):
+    from bot.pipeline import MatchContext
+
+    raw = _raw(kickoff)
+    raw["id"] = eid
+    ev = parse_event(raw, NBA)
+    ctx = MatchContext(1, ev, market_view(ev))
+    ctx.factors = factors
+    return ctx

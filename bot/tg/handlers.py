@@ -193,12 +193,21 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def analyze_button(top=None) -> InlineKeyboardMarkup:
-    """Под утренним списком: «🔍 Анализ» и сразу досье ⭐-матчей одним нажатием."""
+def _quick_row(top=None, nba=None) -> list[InlineKeyboardButton]:
+    """Кнопки быстрых досье: ⭐ — матчи с возможным перевесом, 🏀 — НБА по анализу."""
+    row = [InlineKeyboardButton(text=f"⭐ {m.idx}", callback_data=f"pick:{m.event.event_id}"[:64])
+           for m, _, _ in (top or [])[:5]]
+    row += [InlineKeyboardButton(text=f"🏀 {m.idx}", callback_data=f"pick:{m.event.event_id}"[:64])
+            for m in (nba or [])[:3]]
+    return row[:8]
+
+
+def analyze_button(top=None, nba=None) -> InlineKeyboardMarkup:
+    """Под утренним списком: «🔍 Анализ» и сразу досье отобранных матчей одним нажатием."""
     rows = [[InlineKeyboardButton(text="🔍 Анализ", callback_data="menu:analyze")]]
-    if top:
-        rows.append([InlineKeyboardButton(text=f"⭐ {m.idx}", callback_data=f"pick:{m.event.event_id}"[:64])
-                     for m, _, _ in top[:5]])
+    quick = _quick_row(top, nba)
+    if quick:
+        rows.append(quick)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -228,15 +237,15 @@ def more_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def matches_keyboard(matches, top=None) -> InlineKeyboardMarkup | None:
+def matches_keyboard(matches, top=None, nba=None) -> InlineKeyboardMarkup | None:
     """Кнопки с номерами матчей: нажал — получил досье (или разбор в режиме api).
     Первой строкой — ⭐ матчи, которые стоит разобрать."""
     if not matches:
         return None
     rows, row = [], []
-    if top:
-        rows.append([InlineKeyboardButton(text=f"⭐ {m.idx}", callback_data=f"pick:{m.event.event_id}"[:64])
-                     for m, _, _ in top[:5]])
+    quick = _quick_row(top, nba)
+    if quick:
+        rows.append(quick)
     for m in matches[:30]:
         row.append(InlineKeyboardButton(text=f"📋 {m.idx}", callback_data=f"pick:{m.event.event_id}"[:64]))
         if len(row) == 5:
@@ -544,14 +553,15 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if not engine.matches:
             await message.answer("Ближайших матчей нет.")
             return
-        top = engine.top_for_analysis()
-        lines = ["🔍 <b>Какой матч разобрать?</b>", "", fmt.top_block(top), "", "<b>Все матчи</b>"]
+        top, nba = engine.top_for_analysis(), engine.nba_top()
+        has_nba = any(m.sport.key == "basketball" for m in engine.matches)
+        lines = ["🔍 <b>Какой матч разобрать?</b>", "", fmt.top_block(top, nba if has_nba else None), "",
+                 "<b>Все матчи</b>"]
         for m in engine.matches[:30]:
-            flag = " 🔎" if m.quant_candidates() else ""
             lines.append(f"<b>{m.idx}.</b> {m.sport.emoji} {fmt.local(m.event.kickoff):%d.%m %H:%M} "
-                         f"{fmt.escape(m.title)}{flag}")
-        lines += ["", "🔎 — модель видит возможный перевес."]
-        await send_long(message.bot, message.chat.id, "\n".join(lines), matches_keyboard(engine.matches, top))
+                         f"{fmt.escape(m.title)}{fmt.flag_of(m)}")
+        lines += ["", "🔎 — модель видит возможный перевес; 🏀 — НБА с перекосом графика."]
+        await send_long(message.bot, message.chat.id, "\n".join(lines), matches_keyboard(engine.matches, top, nba))
 
     @owner.message(F.text == BTN_ANALYZE)
     async def b_analyze(message: Message) -> None:
@@ -797,10 +807,12 @@ async def run_morning_matches(bot: Bot, engine: Engine, chat_id: int) -> None:
         log.exception("morning matches failed")
         await bot.send_message(chat_id, f"Не удалось загрузить матчи: {type(exc).__name__}")
         return
-    top = engine.top_for_analysis(matches)
-    text = (f"☀️ <b>Матчи на {settings.lookahead_hours} часов</b>\n\n" + fmt.top_block(top) + "\n\n"
+    top, nba = engine.top_for_analysis(matches), engine.nba_top(matches)
+    has_nba = any(m.sport.key == "basketball" for m in matches)
+    text = (f"☀️ <b>Матчи на {settings.lookahead_hours} часов</b>\n\n" + fmt.top_block(top, nba if has_nba else None)
+            + "\n\n"
             + fmt.matches_list(matches) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
-    await send_long(bot, chat_id, text, analyze_button(top) if matches else None)
+    await send_long(bot, chat_id, text, analyze_button(top, nba) if matches else None)
 
 
 async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:

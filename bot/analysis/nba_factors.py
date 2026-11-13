@@ -93,13 +93,17 @@ class Factors:
     side: str  # «хозяева» / «гости» / «—»
     reasons: list[str]
 
+    @property
+    def side_gen(self) -> str:
+        return {"хозяева": "хозяев", "гости": "гостей"}.get(self.side, self.side)
+
     def text(self) -> str:
         lines = ["ФАКТОРЫ ГРАФИКА (бот, по результатам сезона; агентам — проверить и дополнить):"]
         for label, t in (("хозяева", self.home), ("гости", self.away)):
             lines.append(f"  {t.team} ({label}): " + ("; ".join(t.notes) or "без особенностей")
                          + f" — усталость {t.fatigue:.1f}")
         if self.side != "—":
-            lines.append(f"  Перекос графика в пользу: {self.side} ({self.edge:+.1f}). "
+            lines.append(f"  Перекос графика в пользу {self.side_gen} ({self.edge:+.1f}). "
                          + "; ".join(self.reasons))
         else:
             lines.append("  Перекоса графика нет.")

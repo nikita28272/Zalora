@@ -781,6 +781,23 @@ class Engine:
             cand = f"КАНДИДАТ ОТ МОДЕЛИ: {sel} = {ctx.ru(sel)}, средний кэф {ctx.market.avg_odds[sel]:.2f}, ожидание {ev:+.1%}"
         else:
             cand = "КАНДИДАТ ОТ МОДЕЛИ: нет явного перевеса."
+        if ctx.sport.key == "basketball" and settings.nba_mode == "analysis":
+            return "\n\n".join([
+                f"ДОСЬЕ #{num} ДЛЯ БОССА",
+                ctx.brief(),
+                ctx.numbers(),
+                self.finance_report(),
+                "РЕЖИМ НБА: ПО АНАЛИЗУ (не по перевесу над линией).",
+                "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md, раздел «НБА: работа по анализу»:\n"
+                "1. Параллельно запусти субагентов «травмы и составы», «контекст: мораль, мотивация, график, "
+                "перелёты», «статистика матчапа», «эксперты (зарубежные и РУ)», затем «адвоката дьявола».\n"
+                f"2. Каждый докладывает по всем исходам: {codes}.\n"
+                "3. Проверь факторы графика бота, оцени вероятность каждого исхода по фактам.\n"
+                "4. Выбери ДВА исхода с самым сильным обоснованием. Уверенность: high — 3+ независимых "
+                "фактора за и нет вопросов по составу; medium — 2 фактора; low — иначе.\n"
+                f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
+                f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
+            ])
         return "\n\n".join([
             f"ДОСЬЕ #{num} ДЛЯ БОССА",
             ctx.brief(),
@@ -894,10 +911,27 @@ class Engine:
         unit = round_stake(bank * settings.paper_stake_pct)
         state = self.db.risk_state()
         made: list[Pick] = []
+        by_analysis = ctx.sport.key == "basketball" and settings.nba_mode == "analysis"
         for sel, _ in picks:
             row = res.table[sel]
             p, odds, ev = row.p_final, row.odds, row.edge or 0.0
-            positive = ev >= settings.min_edge and settings.min_odds <= odds <= settings.max_odds
+            in_range = settings.min_odds <= odds <= settings.max_odds
+            if by_analysis:
+                # НБА: ставка по силе разбора (уверенность босса), а не по перевесу над линией
+                positive = confidence in ("medium", "high") and in_range
+                if positive:
+                    pct = settings.nba_stake_pct * (1.5 if confidence == "high" else 1.0)
+                    sd = flat_stake(state, settings, pct)
+                    stake, note = (sd.stake, f"по анализу: {sd.reason}") if sd.allowed else (
+                        unit, "финансист: " + sd.reason)
+                else:
+                    stake = unit
+                    note = ("разбор слабый: если ставить, то не больше "
+                            f"{settings.paper_stake_pct:.1%} банка" if in_range
+                            else f"кэф вне диапазона {settings.min_odds}–{settings.max_odds}")
+                made.append(Pick(sel, p, row.p_market, odds, ev, round(1 / p, 2), positive, stake, note))
+                continue
+            positive = ev >= settings.min_edge and in_range
             if positive:
                 sd = decide_stake(p, odds, state, settings)
                 if sd.allowed:
@@ -956,11 +990,28 @@ class Engine:
         for m in (self.matches if matches is None else matches):
             if m.event.event_id in done or not is_prematch(m.event.kickoff):
                 continue
+            if m.sport.key == "basketball" and settings.nba_mode == "analysis":
+                continue  # НБА отбирается по факторам графика, а не по перевесу (см. nba_top)
             chance = m.best_chance()
             if chance and chance[1] >= settings.top_min_edge:
                 scored.append((m, chance[0], chance[1]))
         scored.sort(key=lambda x: x[2], reverse=True)
         return scored[:settings.top_matches]
+
+    def nba_top(self, matches: list[MatchContext] | None = None) -> list[MatchContext]:
+        """НБА «по анализу»: до NBA_TOP матчей с самым сильным перекосом графика и усталости
+        (back-to-back против отдыха, перелёты, длинный выезд, высота), не слабее NBA_MIN_FACTOR.
+        Остальные матчи НБА агентам не отдаём: там у анализа нет зацепки."""
+        if settings.nba_mode != "analysis":
+            return []
+        done = self.analyzed_events()
+        picked = [
+            m for m in (self.matches if matches is None else matches)
+            if m.sport.key == "basketball" and m.factors is not None and m.event.event_id not in done
+            and is_prematch(m.event.kickoff) and m.factors.score >= settings.nba_min_factor
+        ]
+        picked.sort(key=lambda m: m.factors.score, reverse=True)
+        return picked[:settings.nba_top]
 
     # ---------- поздняя проверка ----------
     def num_for_event(self, event_id: str) -> int | None:
