@@ -47,24 +47,33 @@ def schedule_jobs(scheduler: AsyncIOScheduler, bot, engine, db) -> None:
     misfire_grace_time: если в момент запуска бот был занят, задача выполнится в течение часа.
     """
     sh, sm = _hm(settings.scan_time)
-    th, tm = _hm(settings.settle_time)
     common = dict(misfire_grace_time=3600, coalesce=True, max_instances=1)
     scheduler.add_job(run_daily, CronTrigger(hour=sh, minute=sm, timezone=settings.timezone),
                       args=[bot, engine, settings.owner_id], id="daily", **common)
-    scheduler.add_job(run_settle, CronTrigger(hour=th, minute=tm, timezone=settings.timezone),
-                      args=[bot, engine, db, settings.owner_id], id="settle", **common)
+    # итоги — несколько раз в день («11:00,15:00»): сначала по сыгранным, потом по оставшимся
+    for i, t in enumerate(settle_times()):
+        th, tm = _hm(t)
+        scheduler.add_job(run_settle, CronTrigger(hour=th, minute=tm, timezone=settings.timezone),
+                          args=[bot, engine, db, settings.owner_id], id=f"settle{i or ''}", **common)
     if not settings.api_mode:  # напоминания о поздней проверке — только в режиме «босс в чате»
         scheduler.add_job(run_late_checks, IntervalTrigger(minutes=10), args=[bot, engine, settings.owner_id],
                           id="late", misfire_grace_time=300, coalesce=True, max_instances=1)
 
 
 def _next_runs_text(scheduler: AsyncIOScheduler) -> str:
-    names = {"daily": "матчи дня", "settle": "итоги"}
+    def name(job_id: str) -> str | None:
+        return "матчи дня" if job_id == "daily" else "итоги" if job_id.startswith("settle") else None
+
     parts = []
-    for job in sorted((j for j in scheduler.get_jobs() if j.id in names), key=lambda j: j.next_run_time):
+    for job in sorted((j for j in scheduler.get_jobs() if name(j.id)), key=lambda j: j.next_run_time):
         when = job.next_run_time.astimezone(ZoneInfo(settings.timezone))
-        parts.append(f"{names.get(job.id, job.id)} — {when:%d.%m %H:%M}")
+        parts.append(f"{name(job.id)} — {when:%d.%m %H:%M}")
     return "Ближайшие: " + "; ".join(parts) + f" ({settings.timezone})"
+
+
+def settle_times() -> list[str]:
+    """SETTLE_TIME: одно время или несколько через запятую («11:00,15:00»)."""
+    return [t.strip() for t in settings.settle_time.split(",") if t.strip()] or ["11:00"]
 
 
 def _hm(value: str) -> tuple[int, int]:

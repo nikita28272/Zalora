@@ -17,8 +17,8 @@ def test_jobs_fire_at_local_time():
         sched.start(paused=True)
         now = datetime(2026, 11, 13, 4, 0, tzinfo=timezone.utc)
         out = {}
-        assert {j.id for j in sched.get_jobs()} >= {"daily", "settle", "late"}
-        for job in (j for j in sched.get_jobs() if j.id in ("daily", "settle")):
+        assert {j.id for j in sched.get_jobs()} >= {"daily", "settle", "settle1", "late"}
+        for job in (j for j in sched.get_jobs() if j.id in ("daily", "settle", "settle1")):
             nxt = job.trigger.get_next_fire_time(None, now).astimezone(ZoneInfo(settings.timezone))
             out[job.id] = (nxt.hour, nxt.minute)
             assert job.misfire_grace_time == 3600
@@ -27,5 +27,7 @@ def test_jobs_fire_at_local_time():
 
     out = asyncio.run(run())
     sh, sm = main._hm(settings.scan_time)
-    th, tm = main._hm(settings.settle_time)
-    assert out["daily"] == (sh, sm) and out["settle"] == (th, tm)
+    assert out["daily"] == (sh, sm)
+    # итоги дважды: 11:00 — по сыгранным, 15:00 — по оставшимся
+    assert main.settle_times() == ["11:00", "15:00"]
+    assert out["settle"] == (11, 0) and out["settle1"] == (15, 0)
