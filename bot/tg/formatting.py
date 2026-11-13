@@ -417,6 +417,18 @@ def finance_status(st, cfg, discipline: tuple[int, int, list[str]] | None = None
     return "\n".join(lines)
 
 
+def bank_change(before: float, st) -> str:
+    """После расчёта: как изменился банк и от чего финансист считает дальше."""
+    diff = st.bankroll - before
+    if abs(diff) < 0.5:
+        head = f"💰 Финансист: банк без изменений — {_money(st.bankroll)}."
+    else:
+        head = (f"💰 Финансист: банк {_money(before)} → <b>{_money(st.bankroll)}</b> ({_money_signed(diff)})"
+                + (" — новый пик!" if st.bankroll >= max(st.peak, st.bankroll) and diff > 0 else "") + ".")
+    return (head + f" Дальше считаю ставки от нового банка: свободно {_money(st.free)}.\n"
+            + finance_status(st, settings, short=True))
+
+
 def bet_advice(s: Signal, plan, st) -> str:
     """Шаг 1 после «✅ Сделал»: сколько ставить (по кэфу из досье и текущему банку)."""
     lines = [f"💰 <b>Финансист: {escape(sig_short(s))}</b> ({escape(s.home)} — {escape(s.away)})",

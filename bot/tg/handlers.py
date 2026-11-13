@@ -1052,6 +1052,7 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
     from ..analysis.bankroll import risk_mode
 
     before = risk_mode(db.risk_state(), settings)
+    bank_before = db.bankroll()
     try:
         settled = await engine.settle()
     except Exception as exc:  # noqa: BLE001
@@ -1064,7 +1065,7 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
         return
     st = db.risk_state()
     after = risk_mode(st, settings)
-    text = fmt.settle_report(settled, db.bankroll()) + "\n\n" + fmt.finance_status(st, settings, short=True)
+    text = fmt.settle_report(settled, db.bankroll()) + "\n\n" + fmt.bank_change(bank_before, st)
     if after.multiplier != before.multiplier:
         worse = after.multiplier < before.multiplier
         text += ("\n" + ("⚠️" if worse else "✅") + f" Финансист: режим меняется на «{fmt.escape(after.label)}» — "

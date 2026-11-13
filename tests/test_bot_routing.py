@@ -343,3 +343,26 @@ def test_fire_marks_from_verdict_and_command():
     from bot.tg import formatting as fmt
     hot = fmt.hot_block(db.hot_open())
     assert "Обратить внимание" in hot and "Arsenal" in hot
+
+
+
+def test_settle_adds_winnings_to_bank_and_reports_change():
+    from datetime import timedelta
+    from bot.data.stats import Result
+
+    bot, dp, session, db, engine, ctx = _setup_with_match()
+    db.set_bankroll(10000)
+    num = engine.save_candidate(ctx)
+    sid = engine.manual_top(num, [("home", 0.56)], "medium").picks[0].signal_id
+    db.decide(sid, placed=True, odds=2.10, stake=300)
+    db.conn.execute("UPDATE signals SET kickoff = ?", ((datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),))
+
+    async def finished(codes, date_from, date_to):
+        return [Result(1, "PL", datetime.now(timezone.utc) - timedelta(hours=5), "Arsenal FC", "Chelsea FC", 2, 0)]
+
+    engine.stats.finished_between = finished
+    asyncio.run(handlers.run_settle(bot, engine, db, OWNER))
+    assert db.bankroll() == 10000 + 300 * 1.10  # выигрыш прибавлен
+    assert db.bank_peak() == db.bankroll()  # новый пик
+    text = _texts(session)[-1]
+    assert "банк 10 000 → <b>10 330</b> (+330)" in text and "от нового банка" in text
