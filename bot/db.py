@@ -200,6 +200,14 @@ class DB:
         )
         self.conn.commit()
 
+    def items(self, prefix: str) -> list[tuple[str, object]]:
+        rows = self.conn.execute("SELECT key, value FROM kv WHERE key LIKE ?", (prefix + "%",))
+        return [(r["key"], json.loads(r["value"])) for r in rows]
+
+    def delete(self, key: str) -> None:
+        self.conn.execute("DELETE FROM kv WHERE key = ?", (key,))
+        self.conn.commit()
+
     # ---------- банк ----------
     def bankroll(self) -> float:
         return float(self.get("bankroll", settings.start_bankroll))

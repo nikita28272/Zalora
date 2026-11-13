@@ -57,7 +57,13 @@ class Settings:
     odds_api_key: str = field(default_factory=lambda: _env("ODDS_API_KEY"))
     football_data_key: str = field(default_factory=lambda: _env("FOOTBALL_DATA_API_KEY"))
 
-    # --- LLM ---
+    # --- режим агентов ---
+    # manual — «босс в чате»: бот готовит досье, разбор делает Claude в чате, вердикт приходит командой /verdict;
+    # api    — агенты работают через Claude API прямо в боте (нужен ANTHROPIC_API_KEY).
+    agents_mode: str = field(default_factory=lambda: _env("AGENTS_MODE", "manual").lower())
+    manual_candidates_per_scan: int = field(default_factory=lambda: _int("MANUAL_CANDIDATES_PER_SCAN", 3))
+
+    # --- LLM (только для AGENTS_MODE=api) ---
     llm_model_chief: str = field(default_factory=lambda: _env("LLM_MODEL_CHIEF", "claude-opus-5-5"))
     # Экономичный режим: босс на Opus, помощники на Sonnet (примерно вдвое дешевле Opus)
     llm_model_agents: str = field(default_factory=lambda: _env("LLM_MODEL_AGENTS", "claude-sonnet-5-5"))
@@ -101,9 +107,13 @@ class Settings:
             missing.append("ODDS_API_KEY")
         if not self.football_data_key:
             missing.append("FOOTBALL_DATA_API_KEY")
-        if not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
+        if self.api_mode and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
             missing.append("ANTHROPIC_API_KEY")
         return missing
+
+    @property
+    def api_mode(self) -> bool:
+        return self.agents_mode == "api"
 
 
 settings = Settings()

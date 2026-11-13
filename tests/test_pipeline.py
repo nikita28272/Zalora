@@ -190,3 +190,74 @@ def test_matches_list_and_chunks():
     assert "Arsenal" in text and "🔎" in text
     parts = chunks("строка\n" * 2000, limit=500)
     assert all(len(p) <= 500 for p in parts)
+
+
+# ---------- режим «босс в чате» ----------
+def test_manual_flow_dossier_to_signal():
+    from bot.tg.handlers import parse_verdict
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
+    num = engine.save_candidate(ctx)
+    assert engine.save_candidate(ctx) == num  # тот же матч — тот же номер
+
+    text = engine.dossier(ctx, num)
+    assert f"ДОСЬЕ #{num} ДЛЯ БОССА" in text and f"/verdict {num}" in text
+    assert "ДОКЛАД ФИНАНСИСТА" in text and "BOSS.md" in text
+    assert len(fmt.dossier_message(text)) < 4000  # влезает в одно сообщение Telegram
+
+    # снимок переживает перезапуск бота
+    engine2 = Engine(db)
+    restored = engine2.load_candidate(num)
+    assert restored.title == ctx.title and restored.market.fair == ctx.market.fair
+
+    n, sel, p, conf = parse_verdict(f"{num} П1 54% medium")
+    res = engine2.manual_verdict(n, sel, p, conf)
+    assert res.signal_id is not None, res.skip_reason
+    assert abs(res.table["home"].p_final + res.table["draw"].p_final + res.table["away"].p_final - 1) < 1e-6
+    msg = fmt.analysis(res)
+    assert "СИГНАЛ" in msg and "Стоимость" not in msg
+
+
+def test_manual_verdict_rejections():
+    db = DB(":memory:")
+    engine = Engine(db)
+    try:
+        engine.manual_verdict(99, "home", 0.5, "medium")
+        raise AssertionError("ожидали ошибку")
+    except ValueError as exc:
+        assert "не найдено" in str(exc)
+
+    ctx = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
+    num = engine.save_candidate(ctx)
+    res = engine.manual_verdict(num, "home", ctx.market.fair["home"], "low")  # согласен с рынком
+    assert res.signal_id is None and "Перевес" in res.skip_reason
+
+    late = _ctx(datetime.now(timezone.utc) + timedelta(minutes=20))
+    late.event.event_id = "evt-late"
+    num2 = engine.save_candidate(late)
+    res2 = engine.manual_verdict(num2, "home", 0.6, "high")
+    assert res2.signal_id is None and "прематч" in res2.skip_reason
+
+
+def test_candidates_message_and_keyboard():
+    from bot.tg.handlers import dossier_keyboard
+
+    ctx = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
+    text = fmt.candidates_message([(5, ctx)], total=12)
+    assert "#5" in text and "Arsenal" in text
+    kb = dossier_keyboard([5, 6, 7])
+    assert [b.callback_data for row in kb.inline_keyboard for b in row] == ["dossier:5", "dossier:6", "dossier:7"]
+    assert "Кандидатов сегодня нет" in fmt.candidates_message([], total=12)
+
+
+def test_parse_verdict_variants():
+    from bot.tg.handlers import parse_verdict
+
+    assert parse_verdict("7 home 0.54 medium") == (7, "home", 0.54, "medium")
+    assert parse_verdict("#7 тб 0,57 высокая") == (7, "over", 0.57, "high")
+    assert parse_verdict("7 X 30") == (7, "draw", 0.30, "medium")
+    assert parse_verdict("7 home 1.5") is None
+    assert parse_verdict("7 home") is None
+    assert parse_verdict("7 кто-то 0.5") is None

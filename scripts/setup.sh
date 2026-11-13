@@ -40,15 +40,23 @@ ask() {  # ask KEY "Вопрос" [значение по умолчанию]
 echo "=== Настройка бота сигналов ==="
 echo "Вставляйте ключи по одному и жмите Enter."
 echo
-ask TELEGRAM_BOT_TOKEN    "1/5 Токен бота от @BotFather"
-ask ANTHROPIC_API_KEY     "2/5 Ключ Claude API (console.anthropic.com)"
-ask ODDS_API_KEY          "3/5 Ключ The Odds API"
-ask FOOTBALL_DATA_API_KEY "4/5 Ключ football-data.org"
-ask START_BANKROLL        "5/5 Ваш банк в рублях" "10000"
+ask TELEGRAM_BOT_TOKEN    "1/4 Токен бота от @BotFather"
+ask ODDS_API_KEY          "2/4 Ключ The Odds API"
+ask FOOTBALL_DATA_API_KEY "3/4 Ключ football-data.org"
+ask START_BANKROLL        "4/4 Ваш банк в рублях" "10000"
+
+# Режим агентов: по умолчанию «босс в чате», ключ Claude API не нужен
+if [ "$(current AGENTS_MODE)" = "api" ]; then
+    ask ANTHROPIC_API_KEY "Ключ Claude API (console.anthropic.com)"
+else
+    set_var AGENTS_MODE manual
+fi
 echo
 
 missing=""
-for k in TELEGRAM_BOT_TOKEN ANTHROPIC_API_KEY ODDS_API_KEY FOOTBALL_DATA_API_KEY; do
+required="TELEGRAM_BOT_TOKEN ODDS_API_KEY FOOTBALL_DATA_API_KEY"
+[ "$(current AGENTS_MODE)" = "api" ] && required="$required ANTHROPIC_API_KEY"
+for k in $required; do
     [ -z "$(current "$k")" ] && missing="$missing $k"
 done
 if [ -n "$missing" ]; then

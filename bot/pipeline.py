@@ -25,11 +25,11 @@ from zoneinfo import ZoneInfo
 
 from .agents import team
 from .agents.llm import AgentError, AgentRun
-from .agents.schemas import ALL_OUTCOMES, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
+from .agents.schemas import ALL_OUTCOMES, ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
 from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds
 from .analysis.market import MarketView, market_view
 from .analysis.poisson import ModelOutput, PoissonModel
-from .config import LEAGUES, settings
+from .config import LEAGUES, LEAGUES_BY_ODDS_KEY, settings
 from .data import news
 from .data.odds import Event, OddsClient
 from .data.stats import StandingRow, StatsClient
@@ -453,6 +453,145 @@ class Engine:
                     "Он защищает бюджет на Claude API; поменять можно в MAX_LLM_ANALYSES_PER_DAY."
                 )
             return await self.analyze(ctx)
+
+    # ---------- режим «босс в чате» ----------
+    @staticmethod
+    def _snapshot(ctx: MatchContext) -> dict:
+        m, mo = ctx.market, ctx.model
+        row = lambda r: None if r is None else {  # noqa: E731
+            "position": r.position, "team": r.team, "played": r.played, "points": r.points,
+            "goal_diff": r.goal_diff, "form": r.form,
+        }
+        return {
+            "event_id": ctx.event.event_id,
+            "league": ctx.event.league.odds_key,
+            "kickoff": ctx.event.kickoff.isoformat(),
+            "home": ctx.event.home_team,
+            "away": ctx.event.away_team,
+            "market": {"fair": m.fair, "avg_odds": m.avg_odds, "best_odds": m.best_odds,
+                       "n_books": m.n_books, "margin": m.avg_margin_1x2, "source": m.source},
+            "model": None if mo is None else {
+                "lh": mo.lambda_home, "la": mo.lambda_away, "probs": mo.probs,
+                "hg": mo.home_games, "ag": mo.away_games,
+            },
+            "home_row": row(ctx.home_row), "away_row": row(ctx.away_row),
+            "home_form": ctx.home_form, "away_form": ctx.away_form,
+            "home_last": ctx.home_last, "away_last": ctx.away_last,
+        }
+
+    @staticmethod
+    def _from_snapshot(snap: dict, num: int) -> MatchContext:
+        event = Event(snap["event_id"], LEAGUES_BY_ODDS_KEY[snap["league"]],
+                      datetime.fromisoformat(snap["kickoff"]), snap["home"], snap["away"])
+        mk = snap["market"]
+        market = MarketView(mk["fair"], mk["avg_odds"], mk["best_odds"], mk["n_books"], mk["margin"], mk["source"])
+        mo = snap["model"]
+        model = None if mo is None else ModelOutput(mo["lh"], mo["la"], mo["probs"], mo["hg"], mo["ag"])
+        row = lambda r: None if r is None else StandingRow(**r)  # noqa: E731
+        return MatchContext(
+            idx=num, event=event, market=market, model=model,
+            home_row=row(snap["home_row"]), away_row=row(snap["away_row"]),
+            home_form=snap["home_form"], away_form=snap["away_form"],
+            home_last=snap["home_last"], away_last=snap["away_last"],
+        )
+
+    def save_candidate(self, ctx: MatchContext) -> int:
+        """Сохраняет снимок матча для досье и возвращает его номер (тот, что идёт в /verdict)."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=3)
+        for key, snap in self.db.items("cand:"):
+            if datetime.fromisoformat(snap["kickoff"]) < cutoff:
+                self.db.delete(key)
+                self.db.delete(f"cand_event:{snap['event_id']}")
+        num = self.db.get(f"cand_event:{ctx.event.event_id}")
+        if num is None:
+            num = int(self.db.get("cand_seq", 0)) + 1
+            self.db.set("cand_seq", num)
+            self.db.set(f"cand_event:{ctx.event.event_id}", num)
+        self.db.set(f"cand:{num}", self._snapshot(ctx))  # свежая линия при каждом досье
+        return num
+
+    def load_candidate(self, num: int) -> MatchContext | None:
+        snap = self.db.get(f"cand:{num}")
+        return self._from_snapshot(snap, num) if snap else None
+
+    def dossier(self, ctx: MatchContext, num: int) -> str:
+        cands = ctx.quant_candidates()
+        if cands:
+            sel, ev = cands[0]
+            cand = f"КАНДИДАТ ОТ МОДЕЛИ: {SEL_RU[sel]}, средний кэф {ctx.market.avg_odds[sel]:.2f}, ожидание {ev:+.1%}"
+        else:
+            cand = "КАНДИДАТ ОТ МОДЕЛИ: нет явного перевеса."
+        return "\n\n".join([
+            f"ДОСЬЕ #{num} ДЛЯ БОССА",
+            ctx.brief(),
+            ctx.numbers(),
+            self.finance_report(),
+            cand,
+            "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md репозитория nikita28272/Zalora:\n"
+            "1. Параллельно запусти субагентов «новости» (веб-поиск: травмы, составы, мотивация) "
+            "и «зарубежные аналитики» (веб-поиск: прогнозы экспертов, доля за каждый исход), "
+            "затем «адвоката дьявола» (сильнейший аргумент против каждого исхода).\n"
+            "2. Каждый докладывает по всем исходам: П1, X, П2, ТБ2.5, ТМ2.5.\n"
+            f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
+            "без веской причины.\n"
+            f"4. Если есть ставка с перевесом от {settings.min_edge:.0%}, последней строкой дай команду для бота:\n"
+            f"/verdict {num} <home|draw|away|over|under> <вероятность 0-1> <low|medium|high>\n"
+            "Если ставки нет — так и скажи, без команды.",
+        ])
+
+    async def candidates(self) -> tuple[list[MatchContext], list[tuple[int, MatchContext]]]:
+        async with self._lock:
+            matches = await self.load_matches()
+            ranked = sorted(
+                (
+                    (ctx, cands[0][1])
+                    for ctx in matches
+                    if (cands := ctx.quant_candidates()) and not self.db.has_signal(ctx.event.event_id)
+                ),
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            out = [(self.save_candidate(ctx), ctx) for ctx, _ in ranked[: settings.manual_candidates_per_scan]]
+            return matches, out
+
+    async def dossier_by_index(self, idx: int) -> tuple[int, MatchContext]:
+        async with self._lock:
+            if not self.matches:
+                await self.load_matches()
+            ctx = next((m for m in self.matches if m.idx == idx), None)
+            if ctx is None:
+                raise ValueError("Нет матча с таким номером. Обновите список: /matches")
+            if not is_prematch(ctx.event.kickoff):
+                raise ValueError("Матч скоро начнётся или уже идёт. Работаем только в прематче.")
+            return self.save_candidate(ctx), ctx
+
+    def manual_verdict(self, num: int, selection: str, probability: float, confidence: str) -> AnalysisResult:
+        """Вердикт босса из чата -> проверки и расчёт финансиста -> сигнал."""
+        ctx = self.load_candidate(num)
+        if ctx is None:
+            raise ValueError(f"Досье #{num} не найдено (или устарело). Запросите новое.")
+        fair = ctx.market.fair
+        if selection not in fair:
+            raise ValueError("По этому исходу нет линии букмекеров.")
+        group = ("home", "draw", "away") if selection in ("home", "draw", "away") else ("over", "under")
+        probs = {o: fair.get(o, 0.5) for o in ALL_OUTCOMES}
+        rest = sum(fair[o] for o in group if o != selection)
+        for o in group:
+            probs[o] = probability if o == selection else fair[o] * (1 - probability) / rest
+        res = AnalysisResult(ctx=ctx)
+        cands = ctx.quant_candidates()
+        res.candidate = cands[0][0] if cands else None
+        res.verdict = ChiefVerdict(
+            outcomes=[ChiefOutcome(selection=o, probability=probs[o], comment="") for o in ALL_OUTCOMES],
+            decision="bet",
+            selection=selection,
+            confidence=confidence,
+            reasoning=f"Полный разбор с субагентами — в чате с боссом (досье #{num}).",
+            pros=[],
+            cons=[],
+        )
+        self._finalize(res)
+        return res
 
     # ---------- проверка исходов (аналитик) и учёт (финансист) ----------
     async def settle(self) -> list[Signal]:

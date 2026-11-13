@@ -16,12 +16,13 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import settings
 from .db import DB
 from .pipeline import Engine
-from .tg.handlers import build_routers, run_scan, run_settle
+from .tg.handlers import build_routers, run_daily, run_settle
 
 COMMANDS = [
     BotCommand(command="matches", description="Ближайшие матчи"),
-    BotCommand(command="analyze", description="Разбор матча: /analyze N"),
-    BotCommand(command="scan", description="Найти сигналы сейчас"),
+    BotCommand(command="analyze", description="Разбор или досье матча: /analyze N"),
+    BotCommand(command="scan", description="Кандидаты или сигналы сейчас"),
+    BotCommand(command="verdict", description="Вердикт босса: /verdict 7 home 0.54"),
     BotCommand(command="signals", description="Открытые сигналы"),
     BotCommand(command="stats", description="Статистика журнала"),
     BotCommand(command="history", description="Последние рассчитанные"),
@@ -62,7 +63,7 @@ async def main() -> None:
     if settings.owner_id:
         sh, sm = _hm(settings.scan_time)
         th, tm = _hm(settings.settle_time)
-        scheduler.add_job(run_scan, CronTrigger(hour=sh, minute=sm), args=[bot, engine, settings.owner_id])
+        scheduler.add_job(run_daily, CronTrigger(hour=sh, minute=sm), args=[bot, engine, settings.owner_id])
         scheduler.add_job(run_settle, CronTrigger(hour=th, minute=tm), args=[bot, engine, db, settings.owner_id])
         scheduler.start()
     else:

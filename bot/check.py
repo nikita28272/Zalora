@@ -56,6 +56,8 @@ async def check_football_data(client: httpx.AsyncClient) -> tuple[bool, str]:
 
 
 async def check_claude() -> tuple[bool, str]:
+    if not settings.api_mode:
+        return True, "не нужен: режим «босс в чате» (AGENTS_MODE=manual)"
     client = anthropic.AsyncAnthropic(max_retries=1, timeout=30)
     try:
         for model in {settings.llm_model_chief, settings.llm_model_agents}:

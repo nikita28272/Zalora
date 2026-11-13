@@ -70,13 +70,63 @@ def parse_bet_input(text: str) -> tuple[float, float | None] | None:
     return odds, stake if stake and stake > 0 else None
 
 
+_SEL_ALIASES = {
+    "home": "home", "п1": "home", "1": "home", "w1": "home",
+    "draw": "draw", "x": "draw", "х": "draw", "н": "draw", "ничья": "draw",
+    "away": "away", "п2": "away", "2": "away", "w2": "away",
+    "over": "over", "тб": "over", "тб2.5": "over", "тб2,5": "over", "o2.5": "over",
+    "under": "under", "тм": "under", "тм2.5": "under", "тм2,5": "under", "u2.5": "under",
+}
+_CONF_ALIASES = {
+    "low": "low", "низкая": "low", "medium": "medium", "средняя": "medium", "high": "high", "высокая": "high",
+}
+VERDICT_USAGE = (
+    "Формат: <code>/verdict НОМЕР_ДОСЬЕ ИСХОД ВЕРОЯТНОСТЬ [УВЕРЕННОСТЬ]</code>\n"
+    "Например: <code>/verdict 7 home 0.54 medium</code>\n"
+    "Исход: home/draw/away/over/under (или П1/X/П2/ТБ/ТМ). Вероятность: 0.54 или 54%."
+)
+
+
+def parse_verdict(args: str) -> tuple[int, str, float, str] | None:
+    parts = args.replace("#", " ").split()
+    if len(parts) < 3 or not parts[0].isdigit():
+        return None
+    sel = _SEL_ALIASES.get(parts[1].lower())
+    raw = parts[2].replace(",", ".")
+    percent = raw.endswith("%")
+    try:
+        p = float(raw.rstrip("%"))
+    except ValueError:
+        return None
+    if percent or p >= 2:
+        p /= 100  # «54» или «54%»
+    elif p > 1:
+        return None  # «1.5» — непонятно, что имелось в виду
+    conf = _CONF_ALIASES.get(parts[3].lower(), None) if len(parts) > 3 else "medium"
+    if sel is None or conf is None or not 0 < p < 1:
+        return None
+    return int(parts[0]), sel, p, conf
+
+
+def dossier_keyboard(items: list[int]) -> InlineKeyboardMarkup:
+    rows, row = [], []
+    for num in items:
+        row.append(InlineKeyboardButton(text=f"📋 Досье #{num}", callback_data=f"dossier:{num}"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def build_routers(engine: Engine, db: DB) -> list[Router]:
     owner = Router(name="owner")
     owner.message.filter(lambda m: m.from_user is not None and m.from_user.id == settings.owner_id)
 
     @owner.message(Command("start", "help"))
     async def cmd_help(message: Message) -> None:
-        await message.answer(fmt.HELP)
+        await message.answer(fmt.help_text())
 
     @owner.message(Command("matches"))
     async def cmd_matches(message: Message) -> None:
@@ -94,6 +144,15 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if not command.args or not command.args.strip().isdigit():
             await message.answer("Укажите номер матча из /matches, например: /analyze 3")
             return
+        if not settings.api_mode:
+            try:
+                num, ctx = await engine.dossier_by_index(int(command.args.strip()))
+            except ValueError as exc:
+                await message.answer(str(exc))
+                return
+            await message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
+            await message.answer("Скопируйте досье и отправьте в чат с Claude. Ответ босса со строкой /verdict пришлите сюда.")
+            return
         await message.answer("Агенты работают: новости, эксперты, адвокат дьявола, главный аналитик. Это 1–3 минуты…")
         try:
             res = await engine.analyze_by_index(int(command.args.strip()))
@@ -108,8 +167,26 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("scan"))
     async def cmd_scan(message: Message) -> None:
+        if not settings.api_mode:
+            await message.answer("Ищу кандидатов дня…")
+            await run_candidates(message.bot, engine, message.chat.id)
+            return
         await message.answer("Ищу матчи с перевесом и запускаю агентов…")
         await run_scan(message.bot, engine, message.chat.id, verbose=True)
+
+    @owner.message(Command("verdict"))
+    async def cmd_verdict(message: Message, command: CommandObject) -> None:
+        parsed = parse_verdict(command.args or "")
+        if parsed is None:
+            await message.answer(VERDICT_USAGE)
+            return
+        num, sel, p, conf = parsed
+        try:
+            res = engine.manual_verdict(num, sel, p, conf)
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
+        await send_analysis(message.bot, message.chat.id, res)
 
     @owner.message(Command("signals"))
     async def cmd_signals(message: Message) -> None:
@@ -154,16 +231,19 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
     @owner.message(Command("limits"))
     async def cmd_limits(message: Message) -> None:
         st = db.risk_state()
-        await message.answer(
+        text = (
             "<b>Лимиты финансиста</b>\n"
             f"Ставка: {settings.kelly_fraction:g} Келли, не больше {settings.max_stake_pct:.0%} банка\n"
             f"Ставок в день: {st.bets_today} из {settings.max_bets_per_day}\n"
             f"Дневной лимит убытка: {settings.daily_loss_limit_pct:.0%} банка (сегодня {st.profit_today:+,.0f})\n"
             f"Проигрышей подряд: {st.losing_streak} (пауза после {settings.stop_after_losses})\n"
             f"Минимальный перевес: {settings.min_edge:.0%}, коэффициенты {settings.min_odds}–{settings.max_odds}\n"
-            f"Разборов агентами сегодня: {db.analyses_today()} из {settings.max_llm_analyses_per_day}"
-            .replace(",", " ")
         )
+        if settings.api_mode:
+            text += f"Разборов агентами сегодня: {db.analyses_today()} из {settings.max_llm_analyses_per_day}"
+        else:
+            text += "Режим: босс в чате"
+        await message.answer(text.replace(",", " "))
 
     @owner.message(Command("resume"))
     async def cmd_resume(message: Message) -> None:
@@ -172,6 +252,12 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("usage"))
     async def cmd_usage(message: Message) -> None:
+        if not settings.api_mode:
+            await message.answer(
+                "Режим «босс в чате»: Claude API не используется, бот ничего не тратит на нейросеть.\n"
+                f"Кредитов The Odds API осталось: {engine.odds.requests_remaining or 'неизвестно'}"
+            )
+            return
         u = db.llm_usage_since(30)
         cost = u["cost_usd"]
         avg = cost / u["analyses"] if u["analyses"] else 0
@@ -219,6 +305,16 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             f"Если сумма отличается от рекомендованной ({sig.stake:,.0f}), напишите её вторым числом: "
             f"<code>{sig.min_odds:.2f} 500</code>".replace(",", " ")
         )
+
+    @owner.callback_query(F.data.startswith("dossier:"))
+    async def on_dossier(cb: CallbackQuery) -> None:
+        num = int(cb.data.split(":")[1])
+        ctx = engine.load_candidate(num)
+        if ctx is None:
+            await cb.answer("Досье устарело. Запросите новое: /scan", show_alert=True)
+            return
+        await cb.answer()
+        await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
 
     @owner.message(F.text & ~F.text.startswith("/"))
     async def on_bet_input(message: Message) -> None:
@@ -295,3 +391,22 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
             await bot.send_message(chat_id, "Нет завершённых матчей для расчёта.")
         return
     await send_long(bot, chat_id, fmt.settle_report(settled, db.bankroll()))
+
+
+async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
+    """Режим «босс в чате»: кандидаты дня с кнопками досье."""
+    try:
+        matches, items = await engine.candidates()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("candidates failed")
+        await bot.send_message(chat_id, f"Не удалось подобрать кандидатов: {type(exc).__name__}")
+        return
+    kb = dossier_keyboard([num for num, _ in items]) if items else None
+    await bot.send_message(chat_id, fmt.candidates_message(items, len(matches)), reply_markup=kb)
+
+
+async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:
+    if settings.api_mode:
+        await run_scan(bot, engine, chat_id)
+    else:
+        await run_candidates(bot, engine, chat_id)

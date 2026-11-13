@@ -33,15 +33,13 @@ HELP = f"""<b>Бот сигналов на футбол</b> (топ-5 лиг + �
 Каждый подчинённый докладывает по каждому исходу (П1, X, П2, ТБ2.5, ТМ2.5).
 Главный не выдаёт вердикт, пока не выслушает всех.
 
-<b>Ваш порядок действий</b>
-1. Приходит сигнал с полным разбором.
-2. Жмёте «✅ Поставил» и пишете коэффициент (и сумму, если она другая) или «❌ Не ставил».
-3. После матча главный докладывает итог и новый баланс.
+{{flow}}
 
 <b>Команды</b>
 /matches: ближайшие матчи с вероятностями
-/analyze N: полный разбор матча N из списка
-/scan: найти сигналы сейчас (то же делает ежедневный автоскан)
+/analyze N: {{analyze_help}}
+/scan: {{scan_help}}
+/verdict: принять вердикт босса из чата (режим «босс в чате»)
 /signals: открытые сигналы и ваши отметки
 /stats: ROI за месяц и за всё время
 /history: последние рассчитанные сигналы
@@ -54,6 +52,26 @@ HELP = f"""<b>Бот сигналов на футбол</b> (топ-5 лиг + �
 Автоскан в {settings.scan_time}, проверка исходов в {settings.settle_time} ({settings.timezone}).
 
 {DISCLAIMER}"""
+
+FLOW_API = """<b>Ваш порядок действий</b>
+1. Приходит сигнал с полным разбором.
+2. Жмёте «✅ Поставил» и пишете коэффициент (и сумму, если она другая) или «❌ Не ставил».
+3. После матча главный докладывает итог и новый баланс."""
+
+FLOW_MANUAL = """<b>Режим «босс в чате»</b>
+1. Бот присылает кандидатов дня. Жмёте «📋 Досье» и копируете текст.
+2. Вставляете досье в чат с Claude: босс запускает субагентов и выносит вердикт.
+3. Строку <code>/verdict …</code> из ответа босса отправляете сюда.
+4. Финансист считает сумму, приходит сигнал: «✅ Поставил» или «❌ Не ставил».
+5. После матча бот докладывает итог и новый баланс."""
+
+
+def help_text() -> str:
+    if settings.api_mode:
+        return HELP.format(flow=FLOW_API, analyze_help="полный разбор матча N агентами",
+                           scan_help="найти сигналы сейчас (то же делает ежедневный автоскан)")
+    return HELP.format(flow=FLOW_MANUAL, analyze_help="досье матча N для босса",
+                       scan_help="кандидаты дня с досье (то же делает ежедневный автоскан)")
 
 
 def _pct(x: float | None) -> str:
@@ -196,7 +214,8 @@ def analysis(res: AnalysisResult) -> str:
         out.append(f"😈 Адвокат дьявола ({LEVEL_RU[res.devil.severity]}): {escape(res.devil.summary)}")
     for err in res.errors:
         out.append(f"⚠️ {escape(err)}")
-    out.append(f"\n<i>Стоимость разбора ≈ ${res.cost_usd:.2f}</i>")
+    if res.cost_usd:
+        out.append(f"\n<i>Стоимость разбора ≈ ${res.cost_usd:.2f}</i>")
     if res.signal_id:
         out.append("\nОтметьте, поставили ли вы. Без отметки до начала матча ставка считается несделанной.")
     return "\n".join(out)
@@ -291,3 +310,23 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
         "<i>Ориентир: устойчивый ROI +3…8% на линии топ-лиг — уже сильный результат.</i>"
     )
     return "\n\n".join(parts)
+
+
+def candidates_message(items: list[tuple[int, MatchContext]], total: int) -> str:
+    if not items:
+        return (f"📋 Кандидатов сегодня нет: среди {total} матчей модель не видит перевеса. "
+                "Можно запросить досье на любой матч: /matches, затем /analyze N.")
+    lines = ["📋 <b>Кандидаты дня</b> (модель видит перевес)", ""]
+    for num, ctx in items:
+        sel, ev = ctx.quant_candidates()[0]
+        lines.append(
+            f"<b>#{num}</b> {local(ctx.event.kickoff):%d.%m %H:%M} {escape(ctx.title)}\n"
+            f"    {escape(ctx.event.league.name_ru)} · модель: {SEL_SHORT[sel]}, перевес {ev:+.1%}"
+        )
+    lines += ["", "Жмите «📋 Досье», копируйте текст и отправляйте в чат с Claude (боссу)."]
+    return "\n".join(lines)
+
+
+def dossier_message(text: str) -> str:
+    """Досье в блоке кода: в Telegram у него есть кнопка «Копировать»."""
+    return "<pre>" + escape(text) + "</pre>"
