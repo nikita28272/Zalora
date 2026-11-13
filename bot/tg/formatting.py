@@ -328,5 +328,11 @@ def candidates_message(items: list[tuple[int, MatchContext]], total: int) -> str
 
 
 def dossier_message(text: str) -> str:
-    """Досье в блоке кода: в Telegram у него есть кнопка «Копировать»."""
-    return "<pre>" + escape(text) + "</pre>"
+    """Досье в блоке кода с подписью: у такого блока Telegram показывает кнопку «Копировать»."""
+    return '<pre><code class="language-dossier">' + escape(text) + "</code></pre>"
+
+
+DOSSIER_HINT = (
+    "☝️ Нажмите «Копировать» в правом верхнем углу блока выше, затем вставьте текст в чат с Claude.\n"
+    "Строку <code>/verdict …</code> из ответа босса отправьте сюда."
+)

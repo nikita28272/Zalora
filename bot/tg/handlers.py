@@ -151,7 +151,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
                 await message.answer(str(exc))
                 return
             await message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
-            await message.answer("Скопируйте досье и отправьте в чат с Claude. Ответ босса со строкой /verdict пришлите сюда.")
+            await message.answer(fmt.DOSSIER_HINT)
             return
         await message.answer("Агенты работают: новости, эксперты, адвокат дьявола, главный аналитик. Это 1–3 минуты…")
         try:
@@ -315,6 +315,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             return
         await cb.answer()
         await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
+        await cb.message.answer(fmt.DOSSIER_HINT)
 
     @owner.message(F.text & ~F.text.startswith("/"))
     async def on_bet_input(message: Message) -> None:
