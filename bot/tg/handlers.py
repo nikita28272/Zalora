@@ -430,12 +430,16 @@ def matches_keyboard(matches, top=None, nba=None) -> InlineKeyboardMarkup | None
 
 
 def signals_keyboard(pending) -> InlineKeyboardMarkup | None:
-    """У неотмеченных сигналов — кнопки «Поставил / Не ставил»."""
+    """У неотмеченных сигналов (до начала матча) — «Сделал / Не ставил»; внизу — «🔄 Обновить»."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
     rows = [
         [InlineKeyboardButton(text=f"✅ Сделал #{s.id} {fmt.sig_short(s)}", callback_data=f"bet:{s.id}:placed"),
          InlineKeyboardButton(text=f"❌ Не ставил #{s.id}", callback_data=f"bet:{s.id}:skip")]
-        for s in pending if s.user_decision == "pending"
+        for s in sorted(pending, key=lambda x: x.kickoff) if s.user_decision == "pending" and s.kickoff > now
     ]
+    if pending:
+        rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="board:refresh")])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
@@ -568,16 +572,25 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("signals"))
     async def cmd_signals(message: Message) -> None:
-        pending = sorted(db.pending(), key=lambda s: (not s.hot, s.kickoff))  # 🔥 — наверху
+        pending = db.pending()
         if not pending:
-            await message.answer("Открытых сигналов нет.")
+            await message.answer("📌 Открытых прогнозов и ставок нет. Сыгранные — в «📊 Статистика».")
             return
-        head = "<b>Открытые прогнозы и ставки</b>"
-        if any(s.hot for s in pending):
-            head += "\n🔥 — босс советует обратить внимание: самые вероятные и обоснованные"
-        await send_long(message.bot, message.chat.id,
-                        head + "\n" + "\n".join(fmt.signal_line(s) for s in pending),
-                        signals_keyboard(pending))
+        await send_long(message.bot, message.chat.id, fmt.signals_board(pending), signals_keyboard(pending))
+
+    @owner.callback_query(F.data == "board:refresh")
+    async def on_board_refresh(cb: CallbackQuery) -> None:
+        pending = db.pending()
+        text = fmt.signals_board(pending) if pending else "📌 Открытых прогнозов и ставок нет."
+        await cb.answer("Обновлено")
+        try:
+            if len(text) <= 4000:
+                await cb.message.edit_text(text, reply_markup=signals_keyboard(pending),
+                                           disable_web_page_preview=True)
+                return
+        except Exception:  # noqa: BLE001 — текст не изменился или сообщение слишком старое
+            return
+        await send_long(cb.bot, cb.message.chat.id, text, signals_keyboard(pending))
 
     @owner.message(Command("fire"))
     async def cmd_fire(message: Message, command: CommandObject) -> None:
@@ -1122,6 +1135,9 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
                  + ("ставки остановлены." if after.multiplier == 0 else f"ставки ×{after.multiplier:g}.")
                  + (" Не отыгрывайтесь: размер ставок сам вернётся, когда банк восстановится." if worse else ""))
     await send_long(bot, chat_id, text)
+    pending = db.pending()
+    if pending:  # после итогов — свежий список: сыгранные ушли, остались открытые
+        await send_long(bot, chat_id, fmt.signals_board(pending), signals_keyboard(pending))
 
 
 async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:

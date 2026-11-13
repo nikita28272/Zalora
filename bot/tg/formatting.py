@@ -368,6 +368,65 @@ def signal_line(s: Signal) -> str:
     )
 
 
+def _board_item(s: Signal, now: datetime) -> str:
+    started = s.kickoff <= now
+    status = "▶️" if started else "⏳"
+    marks = ("🔥" if s.hot else "") + (f"🔗#{s.linked_to}" if s.linked_to else "")
+    head = f"   {status}{marks} #{s.id} <b>{escape(_sig_short(s))}</b>"
+    if s.placed:
+        odds = s.actual_odds or s.min_odds
+        stake = s.actual_stake or 0
+        return f"{head} · {_money(stake)} × {odds:.2f} → <b>+{_money(stake * (odds - 1))}</b>"
+    note = {"pending": "❔ решите: сделал или нет", "skipped": "не ставили",
+            "expired": "без отметки"}.get(s.user_decision, "")
+    if started and s.user_decision == "pending":
+        note = "без отметки"
+    return f"{head} · кэф {s.odds_ref:.2f} · {note}"
+
+
+def _board_matches(rows: list[Signal], now: datetime) -> list[str]:
+    """Прогнозы, сгруппированные по матчам, по времени начала."""
+    out, seen = [], {}
+    for s in sorted(rows, key=lambda x: (x.kickoff, x.event_id, x.pick_rank or 9, x.id)):
+        if s.event_id not in seen:
+            seen[s.event_id] = True
+            live = " · <i>идёт / ждёт итога</i>" if s.kickoff <= now else ""
+            out.append(f"\n{_sig_emoji(s)} <b>{local(s.kickoff):%d.%m %H:%M}</b> "
+                       f"{escape(s.home)} — {escape(s.away)}{live}")
+        out.append(_board_item(s, now))
+    return out
+
+
+def signals_board(pending: list[Signal], now: datetime | None = None) -> str:
+    """«📌 Прогнозы и ставки»: сверху ваши ставки, ниже остальные прогнозы босса; по матчам."""
+    from datetime import timezone as _tz
+    now = now or datetime.now(_tz.utc)
+    placed = [s for s in pending if s.placed]
+    other = [s for s in pending if not s.placed]
+    lines = ["📌 <b>Прогнозы и ставки</b>",
+             f"<i>обновлено {local(now):%d.%m %H:%M}</i>"]
+    if placed:
+        stake = sum(s.actual_stake or 0 for s in placed)
+        win = sum((s.actual_stake or 0) * ((s.actual_odds or s.min_odds) - 1) for s in placed)
+        lines += ["", "━━━━━━━━━━━━━━━",
+                  f"💰 <b>ВАШИ СТАВКИ</b> — {len(placed)}, в игре <b>{_money(stake)}</b>, "
+                  f"если всё зайдёт: +{_money(win)}",
+                  "━━━━━━━━━━━━━━━"]
+        lines += _board_matches(placed, now)
+    else:
+        lines += ["", "💰 <b>ВАШИ СТАВКИ</b> — пока нет"]
+    if other:
+        lines += ["", "━━━━━━━━━━━━━━━",
+                  f"🧠 <b>ОСТАЛЬНЫЕ ПРОГНОЗЫ БОССА</b> — {len(other)}",
+                  "━━━━━━━━━━━━━━━"]
+        lines += _board_matches(other, now)
+    lines += ["",
+              "<i>⏳ — до начала, ▶️ — матч идёт или ждёт итога; 🔥 — совет босса, 🔗 — один сценарий.</i>",
+              f"<i>Сыгранные уходят в итоги в {settings.settle_time.replace(',', ' и ')} — "
+              "после этого список обновляется. 🔄 — обновить сейчас.</i>"]
+    return "\n".join(lines)
+
+
 def placed_confirmation(s: Signal, bank: float, in_play: tuple[int, float]) -> str:
     warn = ""
     if s.source == "boss" and not s.positive:

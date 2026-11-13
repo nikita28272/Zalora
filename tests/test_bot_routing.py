@@ -339,7 +339,7 @@ def test_fire_marks_from_verdict_and_command():
     # в списке открытых — 🔥 наверху, в утреннем сообщении — блок «Обратить внимание»
     asyncio.run(dp.feed_update(bot, _msg(handlers.BTN_SIGNALS)))
     text = _texts(session)[-1]
-    assert "🔥 — босс советует" in text and "⏳🔥" in text
+    assert "🔥 — совет босса" in text and "⏳🔥" in text and "ОСТАЛЬНЫЕ ПРОГНОЗЫ БОССА" in text
     from bot.tg import formatting as fmt
     hot = fmt.hot_block(db.hot_open())
     assert "Обратить внимание" in hot and "Arsenal" in hot

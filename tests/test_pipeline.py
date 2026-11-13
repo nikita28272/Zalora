@@ -320,7 +320,8 @@ def test_keyboards():
     sk = signals_keyboard(db.pending())
     assert sk.inline_keyboard[0][0].callback_data == f"bet:{res.signal_id}:placed"
     db.decide(res.signal_id, placed=False)
-    assert signals_keyboard(db.pending()) is None  # отмеченные сигналы без кнопок
+    kb2 = signals_keyboard(db.pending())  # отмеченные — без «Сделал», только «🔄 Обновить»
+    assert [b.callback_data for r in kb2.inline_keyboard for b in r] == ["board:refresh"]
 
     assert {b.callback_data for r in more_keyboard().inline_keyboard for b in r} >= {"menu:history", "menu:settle"}
     assert bank_keyboard().inline_keyboard[0][0].callback_data == "bank:edit"

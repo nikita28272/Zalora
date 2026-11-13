@@ -515,3 +515,21 @@ def test_stats_week_and_month_roi():
     assert "неделя с" in text and "месяц с 01." in text
     assert "ROI +0.0%</b> — 1 из 2 (50%)" in text  # бумага: +10 и −10 при обороте 20
     assert "ваши ставки за неделю: <b>ROI +100.0%</b>" in text
+
+
+def test_signals_board_placed_first():
+    from bot.tg import formatting as fmt
+
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", away="B", odds_ref=1.8, min_odds=1.8,
+                p_market=0.5, p_model=None, edge=0.0, stake=10, confidence="medium", reasoning="r",
+                sport="basketball", p_final=0.55)
+    early = (NOW + timedelta(hours=1)).isoformat()
+    late = (NOW + timedelta(hours=5)).isoformat()
+    a = db.add_signal(event_id="m1", selection="over", home="Early", kickoff=early, **base)
+    b = db.add_signal(event_id="m2", selection="under", home="Late", kickoff=late, **base)
+    db.decide(b, True, 2.0, 100)
+    text = fmt.signals_board(db.pending(), now=NOW)
+    assert text.index("ВАШИ СТАВКИ") < text.index("Late") < text.index("ОСТАЛЬНЫЕ") < text.index("Early")
+    assert "100 × 2.00 → <b>+100</b>" in text and "в игре <b>100</b>" in text
+    assert f"#{a} <b>ТБ" in text and "❔ решите" in text
