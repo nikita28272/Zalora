@@ -303,7 +303,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_MORE)],
         ],
         resize_keyboard=True,
-        is_persistent=True,
+        is_persistent=False,  # меню можно свернуть значком в поле ввода
         input_field_placeholder="Выберите действие или вставьте /verdict …",
     )
 
