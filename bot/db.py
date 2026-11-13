@@ -3,7 +3,7 @@
 У каждого сигнала есть два учёта:
 * реальный — только если владелец отметил «Поставил» (фактический коэффициент и сумма),
   именно он меняет банк;
-* бумажный — результат системы по рекомендации (минимальный коэффициент и рекомендованная сумма),
+* бумажный — результат системы по рекомендации (минимальный или средний коэффициент и рекомендованная сумма),
   нужен, чтобы честно оценивать точность главного аналитика.
 """
 
@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS {name} (
     sport TEXT NOT NULL DEFAULT 'football',
     line REAL,
     source TEXT NOT NULL DEFAULT 'boss',
+    pick_rank INTEGER,
     UNIQUE(event_id, selection, source)
 );
 """
@@ -81,6 +82,7 @@ _MIGRATIONS = {
     "paper_profit": "REAL",
     "sport": "TEXT NOT NULL DEFAULT 'football'",
     "line": "REAL",
+    "pick_rank": "INTEGER",
 }
 
 
@@ -116,10 +118,21 @@ class Signal:
     sport: str = "football"
     line: float | None = None  # линия тотала/форы
     source: str = "boss"  # boss — прогноз босса (/verdict), user — ставка владельца без вердикта
+    pick_rank: int | None = None  # место в топ-2 босса по матчу (1 или 2)
 
     @property
     def placed(self) -> bool:
         return self.user_decision == "placed"
+
+    @property
+    def positive(self) -> bool:
+        """Прогноз с перевесом (не меньше порога MIN_EDGE)."""
+        return self.edge >= settings.min_edge - 1e-9
+
+    @property
+    def paper_odds(self) -> float:
+        """Кэф бумажного учёта: минимальный для ставок с перевесом, средний из досье для остальных."""
+        return min(self.min_odds, self.odds_ref) if self.odds_ref else self.min_odds
 
 
 @dataclass
@@ -167,7 +180,7 @@ def summarize(signals: list[Signal], real: bool) -> Summary | None:
         return None
     staked = sum((s.actual_stake if real else s.stake) or 0 for s in rows)
     profits = [(s.profit if real else s.paper_profit) or 0 for s in rows]
-    odds = [(s.actual_odds if real else s.min_odds) or s.min_odds for s in rows]
+    odds = [(s.actual_odds or s.min_odds) if real else s.paper_odds for s in rows]
     peak = cum = dd = 0.0
     for p in profits:
         cum += p
@@ -254,8 +267,9 @@ class DB:
 
     def risk_state(self) -> RiskState:
         since = _local_day_start_utc()
+        # считаем только сделанные ставки: прогнозы босса (по два на матч) лимит не расходуют
         bets_today = self.conn.execute(
-            "SELECT COUNT(*) FROM signals WHERE created_at >= ? AND user_decision IN ('pending','placed')",
+            "SELECT COUNT(*) FROM signals WHERE user_decision = 'placed' AND decided_at >= ?",
             (since,),
         ).fetchone()[0]
         profit_today = self.conn.execute(
@@ -316,6 +330,17 @@ class DB:
             args.append(source)
         row = self.conn.execute(q + " ORDER BY id DESC LIMIT 1", args).fetchone()
         return self._row(row) if row else None
+
+    def boss_picks(self, event_id: str) -> list[Signal]:
+        rows = self.conn.execute(
+            "SELECT * FROM signals WHERE event_id = ? AND source = 'boss' ORDER BY COALESCE(pick_rank, 99), id",
+            (event_id,),
+        )
+        return [self._row(r) for r in rows]
+
+    def delete_signals(self, ids: list[int]) -> None:
+        self.conn.executemany("DELETE FROM signals WHERE id = ?", [(i,) for i in ids])
+        self.conn.commit()
 
     def pending(self) -> list[Signal]:
         rows = self.conn.execute("SELECT * FROM signals WHERE status = 'pending' ORDER BY kickoff")

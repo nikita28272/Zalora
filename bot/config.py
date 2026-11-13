@@ -117,6 +117,8 @@ class Settings:
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))
     kelly_fraction: float = field(default_factory=lambda: _float("KELLY_FRACTION", 0.25))
     max_stake_pct: float = field(default_factory=lambda: _float("MAX_STAKE_PCT", 0.02))
+    # сумма бумажного учёта (и потолок совета) для прогнозов босса без перевеса
+    paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
     max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 3))
     daily_loss_limit_pct: float = field(default_factory=lambda: _float("DAILY_LOSS_LIMIT_PCT", 0.05))
     stop_after_losses: int = field(default_factory=lambda: _int("STOP_AFTER_LOSSES", 4))

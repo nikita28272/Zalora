@@ -152,27 +152,29 @@ def test_hockey_manual_flow_to_settlement():
     assert "🏒" in text and "ml_home" in text and "hcp_home (Ф1(-1.5))" in text and "вратар" in text
     assert len(fmt.dossier_message(text)) < 4000
 
-    n, sel, p, conf = parse_verdict(f"{num} ф1 0.42 medium")
-    res = engine.manual_verdict(n, sel, p, conf)
-    assert res.signal_id is not None, res.skip_reason
-    msg = fmt.analysis(res)
-    assert "Ф1(-1.5)" in msg and "СИГНАЛ" in msg
-    assert abs(res.table["hcp_home"].p_final + res.table["hcp_away"].p_final - 1) < 1e-6
-    sig = db.signal(res.signal_id)
-    assert sig.sport == "hockey" and sig.line == -1.5
+    assert f"/verdict {num} <исход1>" in text
 
-    # матч сыгран: 4:2 в основное время — фора -1.5 зашла
-    db.conn.execute("UPDATE signals SET kickoff = ? WHERE id = ?",
-                    ((NOW - timedelta(hours=5)).isoformat(), res.signal_id))
+    n, picks, conf = parse_verdict(f"{num} ф1 0.42 тб 0.5 medium")
+    top = engine.manual_top(n, picks, conf)
+    assert [p.selection for p in top.picks] == ["hcp_home", "over"]
+    msg = fmt.top_picks(top, db.bankroll())
+    assert "Ф1(-1.5)" in msg and "Топ-2" in msg
+    sig = db.signal(top.picks[0].signal_id)
+    assert sig.sport == "hockey" and sig.line == -1.5 and sig.pick_rank == 1
+
+    # матч сыгран: 4:2 в основное время — фора -1.5 зашла, тотал 6 < 6.5 — не зашёл
+    db.conn.execute("UPDATE signals SET kickoff = ?", ((NOW - timedelta(hours=5)).isoformat(),))
 
     async def fake_nhl(date_from, date_to):
         return [Result(9, "NHL", NOW - timedelta(hours=5), "Toronto Maple Leafs", "Boston Bruins", 4, 2, 4, 2, "REG")]
 
     engine.nhl.finished_between = fake_nhl
     settled = asyncio.run(engine.settle())
-    assert len(settled) == 1 and settled[0].status == "won" and settled[0].score == "4:2"
+    by_sel = {s.selection: s for s in settled}
+    assert by_sel["hcp_home"].status == "won" and by_sel["hcp_home"].score == "4:2"
+    assert by_sel["over"].status == "lost"
     report = fmt.settle_report(settled, db.bankroll())
-    assert "🏒" in report and "Ф1(-1.5)" in report
+    assert "🏒" in report and "Прогноз 1: Ф1(-1.5)" in report and "зашло 1 из 2" in report
 
 
 def test_wrong_outcome_for_sport_is_rejected():
@@ -180,7 +182,7 @@ def test_wrong_outcome_for_sport_is_rejected():
     fb = _ctx(NOW + timedelta(days=1))
     num = engine.save_candidate(fb)
     with pytest.raises(ValueError):
-        engine.manual_verdict(num, "home_or_what", 0.5, "low")
+        engine.manual_top(num, [("home_or_what", 0.5)], "low")
 
 
 def test_diag_report_runs(monkeypatch, capsys):

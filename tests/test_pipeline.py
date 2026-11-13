@@ -1,4 +1,6 @@
 import asyncio
+
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from bot.agents.llm import AgentError, AgentRun
@@ -216,33 +218,49 @@ def test_manual_flow_dossier_to_signal():
     restored = engine2.load_candidate(num)
     assert restored.title == ctx.title and restored.market.fair == ctx.market.fair
 
-    n, sel, p, conf = parse_verdict(f"{num} П1 54% medium")
-    res = engine2.manual_verdict(n, sel, p, conf)
-    assert res.signal_id is not None, res.skip_reason
-    assert abs(res.table["home"].p_final + res.table["draw"].p_final + res.table["away"].p_final - 1) < 1e-6
-    msg = fmt.analysis(res)
-    assert "СИГНАЛ" in msg and "Стоимость" not in msg
+    # второй исход без перевеса, но записан первым — бот ставит исход с перевесом первым
+    n, picks, conf = parse_verdict(f"{num} ТМ {ctx.market.fair['under']:.3f} П1 54% medium")
+    top = engine2.manual_top(n, picks, conf)
+    assert [p.selection for p in top.picks] == ["home", "under"]
+    assert [p.positive for p in top.picks] == [True, False]
+    assert [p.rank for p in top.picks] == [1, 2]
+    rows = db.boss_picks(ctx.event.event_id)
+    assert [(s.selection, s.pick_rank) for s in rows] == [("home", 1), ("under", 2)]
+    assert rows[0].positive and not rows[1].positive
+    assert rows[1].min_odds > rows[1].odds_ref  # «в ноль» только по кэфу выше рыночного
+    assert rows[1].paper_odds == rows[1].odds_ref  # бумажный учёт — по кэфу из досье
+    msg = fmt.top_picks(top, db.bankroll())
+    assert "1. П1</b> — ✅ есть перевес" in msg and "2. ТМ2.5</b> — ⚪ без перевеса" in msg
+
+    # повторный вердикт заменяет прежний, пока ничего не отмечено
+    top2 = engine2.manual_top(n, [("home", 0.55)], "high")
+    assert top2.replaced and [s.selection for s in db.boss_picks(ctx.event.event_id)] == ["home"]
+    db.decide(top2.picks[0].signal_id, placed=False)
+    with pytest.raises(ValueError, match="уже отметили"):
+        engine2.manual_top(n, [("away", 0.3)], "high")
 
 
 def test_manual_verdict_rejections():
     db = DB(":memory:")
     engine = Engine(db)
-    try:
-        engine.manual_verdict(99, "home", 0.5, "medium")
-        raise AssertionError("ожидали ошибку")
-    except ValueError as exc:
-        assert "не найдено" in str(exc)
+    with pytest.raises(ValueError, match="не найдено"):
+        engine.manual_top(99, [("home", 0.5)], "medium")
 
     ctx = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
     num = engine.save_candidate(ctx)
-    res = engine.manual_verdict(num, "home", ctx.market.fair["home"], "low")  # согласен с рынком
-    assert res.signal_id is None and "Перевес" in res.skip_reason
+    with pytest.raises(ValueError, match="повторяются"):
+        engine.manual_top(num, [("home", 0.5), ("home", 0.5)])
+    with pytest.raises(ValueError, match="больше 100%"):
+        engine.manual_top(num, [("home", 0.7), ("away", 0.4)])
+    # оба исхода одного рынка — можно, если сумма меньше 100%
+    top = engine.manual_top(num, [("home", 0.5), ("away", 0.25)])
+    assert len(top.picks) == 2
 
     late = _ctx(datetime.now(timezone.utc) + timedelta(minutes=20))
     late.event.event_id = "evt-late"
     num2 = engine.save_candidate(late)
-    res2 = engine.manual_verdict(num2, "home", 0.6, "high")
-    assert res2.signal_id is None and "прематч" in res2.skip_reason
+    with pytest.raises(ValueError, match="прематч"):
+        engine.manual_top(num2, [("home", 0.6)], "high")
 
 
 def test_candidates_message_and_keyboard():
@@ -259,12 +277,15 @@ def test_candidates_message_and_keyboard():
 def test_parse_verdict_variants():
     from bot.tg.handlers import parse_verdict
 
-    assert parse_verdict("7 home 0.54 medium") == (7, "home", 0.54, "medium")
-    assert parse_verdict("#7 тб 0,57 высокая") == (7, "over", 0.57, "high")
-    assert parse_verdict("7 X 30") == (7, "draw", 0.30, "medium")
+    assert parse_verdict("7 home 0.54 medium") == (7, [("home", 0.54)], "medium")
+    assert parse_verdict("#7 тб 0,57 высокая") == (7, [("over", 0.57)], "high")
+    assert parse_verdict("7 X 30") == (7, [("draw", 0.30)], "medium")
+    assert parse_verdict("8 ml_away 0.685 ф2 46.5% low") == (8, [("ml_away", 0.685), ("hcp_away", 0.465)], "low")
+    assert parse_verdict("8 п2от 0.68 тм 0.52") == (8, [("ml_away", 0.68), ("under", 0.52)], "medium")
     assert parse_verdict("7 home 1.5") is None
     assert parse_verdict("7 home") is None
     assert parse_verdict("7 кто-то 0.5") is None
+    assert parse_verdict("7 home 0.5 away 0.2 draw 0.3") is None  # больше двух исходов
 
 
 # ---------- кнопки ----------
@@ -304,8 +325,8 @@ def test_morning_report_groups_boss_prediction_and_user_bet():
     engine = Engine(db)
     ctx = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
     num = engine.save_candidate(ctx)
-    boss = engine.manual_verdict(num, "home", 0.56, "medium")
-    user = engine.record_user_bet(num, "over", 1.95, 200)
+    engine.manual_top(num, [("home", 0.56)], "medium")
+    engine.record_user_bet(num, "over", 1.95, 200)
     db.conn.execute("UPDATE signals SET kickoff = ?",
                     ((datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),))
     bank_before = db.bankroll()
@@ -319,7 +340,7 @@ def test_morning_report_groups_boss_prediction_and_user_bet():
     assert db.bankroll() == bank_before - 200  # банк меняет только ваша ставка
     report = fmt.settle_report(settled, db.bankroll())
     assert report.count("Arsenal — Chelsea") == 1  # один блок на матч
-    assert "🧠 Прогноз: П1 — ❌ не зашла" in report and "записано в статистику" in report
+    assert "🧠 Прогноз 1: П1 — ❌ не зашла" in report and "записано в статистику" in report
     assert "💰 Ваша ставка: ТБ2.5" in report
     stats = fmt.stats(db.settled(), db.settled(), db.bankroll())
     assert "Прогнозы босса" in stats

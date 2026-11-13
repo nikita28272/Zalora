@@ -93,19 +93,15 @@ _CONF_ALIASES = {
     "low": "low", "низкая": "low", "medium": "medium", "средняя": "medium", "high": "high", "высокая": "high",
 }
 VERDICT_USAGE = (
-    "Формат: <code>/verdict НОМЕР_ДОСЬЕ ИСХОД ВЕРОЯТНОСТЬ [УВЕРЕННОСТЬ]</code>\n"
-    "Например: <code>/verdict 7 home 0.54 medium</code>\n"
+    "Формат: <code>/verdict НОМЕР_ДОСЬЕ ИСХОД1 ВЕРОЯТНОСТЬ1 ИСХОД2 ВЕРОЯТНОСТЬ2 [УВЕРЕННОСТЬ]</code>\n"
+    "Например: <code>/verdict 7 home 0.54 under 0.56 medium</code>\n"
     "Исход — код из досье: home/draw/away/over/under, в хоккее ещё ml_home/ml_away/hcp_home/hcp_away.\n"
-    "Вероятность: 0.54 или 54%."
+    "Вероятность: 0.54 или 54%. Можно и один исход."
 )
 
 
-def parse_verdict(args: str) -> tuple[int, str, float, str] | None:
-    parts = args.replace("#", " ").split()
-    if len(parts) < 3 or not parts[0].isdigit():
-        return None
-    sel = _SEL_ALIASES.get(parts[1].lower())
-    raw = parts[2].replace(",", ".")
+def _parse_prob(raw: str) -> float | None:
+    raw = raw.replace(",", ".")
     percent = raw.endswith("%")
     try:
         p = float(raw.rstrip("%"))
@@ -115,10 +111,39 @@ def parse_verdict(args: str) -> tuple[int, str, float, str] | None:
         p /= 100  # «54» или «54%»
     elif p > 1:
         return None  # «1.5» — непонятно, что имелось в виду
-    conf = _CONF_ALIASES.get(parts[3].lower(), None) if len(parts) > 3 else "medium"
-    if sel is None or conf is None or not 0 < p < 1:
+    return p if 0 < p < 1 else None
+
+
+def parse_verdict(args: str) -> tuple[int, list[tuple[str, float]], str] | None:
+    """«7 home 0.54 under 0.56 medium» -> (7, [("home", 0.54), ("under", 0.56)], "medium")."""
+    parts = args.replace("#", " ").split()
+    if len(parts) < 3 or not parts[0].isdigit():
         return None
-    return int(parts[0]), sel, p, conf
+    num, rest, conf = int(parts[0]), parts[1:], "medium"
+    if len(rest) % 2 == 1:  # последним словом — уверенность
+        conf = _CONF_ALIASES.get(rest[-1].lower())
+        rest = rest[:-1]
+        if conf is None:
+            return None
+    if not 2 <= len(rest) <= 4:
+        return None
+    picks = []
+    for i in range(0, len(rest), 2):
+        sel, p = _SEL_ALIASES.get(rest[i].lower()), _parse_prob(rest[i + 1])
+        if sel is None or p is None:
+            return None
+        picks.append((sel, p))
+    return num, picks, conf
+
+
+def picks_keyboard(signals) -> InlineKeyboardMarkup | None:
+    """Под двумя исходами босса: по строке кнопок на каждый."""
+    rows = [
+        [InlineKeyboardButton(text=f"✅ Сделал: {fmt.sig_short(s)}", callback_data=f"bet:{s.id}:placed"),
+         InlineKeyboardButton(text="❌ Не ставил", callback_data=f"bet:{s.id}:skip")]
+        for s in signals if s.user_decision == "pending"
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
 def dossier_keyboard(items: list[int]) -> InlineKeyboardMarkup:
@@ -166,14 +191,6 @@ def analyze_button() -> InlineKeyboardMarkup:
     ]])
 
 
-def dossier_bet_keyboard(num: int) -> InlineKeyboardMarkup:
-    """Кнопки сразу под досье."""
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="✅ Ставил", callback_data=f"dbet:{num}:placed"),
-        InlineKeyboardButton(text="❌ Не ставил", callback_data=f"dbet:{num}:skip"),
-    ]])
-
-
 def outcome_keyboard(ctx, num: int, highlight: set[str] | None = None) -> InlineKeyboardMarkup:
     """На какой исход поставили: кнопки по рынкам вида спорта, по рынку в строке."""
     highlight = highlight or set()
@@ -218,7 +235,7 @@ def matches_keyboard(matches) -> InlineKeyboardMarkup | None:
 def signals_keyboard(pending) -> InlineKeyboardMarkup | None:
     """У неотмеченных сигналов — кнопки «Поставил / Не ставил»."""
     rows = [
-        [InlineKeyboardButton(text=f"✅ Поставил #{s.id}", callback_data=f"bet:{s.id}:placed"),
+        [InlineKeyboardButton(text=f"✅ Сделал #{s.id} {fmt.sig_short(s)}", callback_data=f"bet:{s.id}:placed"),
          InlineKeyboardButton(text=f"❌ Не ставил #{s.id}", callback_data=f"bet:{s.id}:skip")]
         for s in pending if s.user_decision == "pending"
     ]
@@ -229,6 +246,24 @@ def bank_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✏️ Изменить банк", callback_data="bank:edit"),
     ]])
+
+
+def _without(markup: InlineKeyboardMarkup | None, signal_id: int) -> InlineKeyboardMarkup | None:
+    if markup is None:
+        return None
+    rows = [r for r in markup.inline_keyboard
+            if not any((b.callback_data or "").startswith(f"bet:{signal_id}:") for b in r)]
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+async def _drop_row(cb: CallbackQuery, signal_id: int) -> None:
+    """Убрать из сообщения кнопки исхода, по которому уже отметились."""
+    if not cb.message or not cb.message.reply_markup:
+        return
+    try:
+        await cb.message.edit_reply_markup(reply_markup=_without(cb.message.reply_markup, signal_id))
+    except Exception as exc:  # noqa: BLE001 — сообщение старое или уже изменено
+        log.info("edit markup: %s", type(exc).__name__)
 
 
 def build_routers(engine: Engine, db: DB) -> list[Router]:
@@ -263,7 +298,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             except ValueError as exc:
                 await message.answer(str(exc))
                 return
-            await message.answer(fmt.dossier_message(engine.dossier(ctx, num)), reply_markup=dossier_bet_keyboard(num))
+            await message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
             await message.answer(fmt.DOSSIER_HINT)
             return
         await message.answer("Агенты работают: новости, эксперты, адвокат дьявола, главный аналитик. Это 1–3 минуты…")
@@ -300,13 +335,14 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if parsed is None:
             await message.answer(VERDICT_USAGE)
             return
-        num, sel, p, conf = parsed
+        num, picks, conf = parsed
         try:
-            res = engine.manual_verdict(num, sel, p, conf)
+            top = engine.manual_top(num, picks, conf)
         except ValueError as exc:
             await message.answer(str(exc))
             return
-        await send_analysis(message.bot, message.chat.id, res)
+        await message.answer(fmt.top_picks(top, db.bankroll()),
+                             reply_markup=picks_keyboard([db.signal(p.signal_id) for p in top.picks]))
 
     @owner.message(Command("signals"))
     async def cmd_signals(message: Message) -> None:
@@ -430,20 +466,24 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if action == "skip":
             db.decide(sig.id, placed=False)
             db.set("awaiting_bet", None)
+            await _drop_row(cb, sig.id)
             await cb.answer("Записал: не ставили")
             await cb.message.answer(
-                f"🧠 Главный: принял, по сигналу #{sig.id} вы не ставите. "
-                "Финансист не трогает банк, аналитик всё равно проверит исход для статистики."
+                f"🧠 Главный: принял, на {fmt.escape(fmt.sig_short(sig))} ({fmt.escape(sig.home)} — "
+                f"{fmt.escape(sig.away)}) вы не ставите. Банк не меняется, итог прогноза попадёт в статистику 📊."
             )
             return
         db.set("awaiting_bank", None)
         db.set("awaiting_dossier_bet", None)
         db.set("awaiting_bet", sig.id)
+        await _drop_row(cb, sig.id)  # если передумаете — кнопки есть в «📌 Прогнозы и ставки»
         await cb.answer()
+        example = sig.odds_ref if sig.source == "boss" and not sig.positive else sig.min_odds
         await cb.message.answer(
-            f"По какому коэффициенту поставили на #{sig.id}? Напишите число, например <code>{sig.min_odds:.2f}</code>.\n"
-            f"Если сумма отличается от рекомендованной ({sig.stake:,.0f}), напишите её вторым числом: "
-            f"<code>{sig.min_odds:.2f} 500</code>".replace(",", " ")
+            f"<b>{fmt.escape(fmt.sig_short(sig))}</b> ({fmt.escape(sig.home)} — {fmt.escape(sig.away)}). "
+            f"По какому коэффициенту поставили? Напишите число, например <code>{example:.2f}</code>.\n"
+            f"Если сумма отличается от {sig.stake:,.0f}, напишите её вторым числом: "
+            f"<code>{example:.2f} 500</code>".replace(",", " ")
         )
 
     @owner.callback_query(F.data.startswith("dossier:"))
@@ -454,7 +494,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await cb.answer("Досье устарело. Запросите новое: /scan", show_alert=True)
             return
         await cb.answer()
-        await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)), reply_markup=dossier_bet_keyboard(num))
+        await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
         await cb.message.answer(fmt.DOSSIER_HINT)
 
     # ---------- кнопки постоянного меню ----------

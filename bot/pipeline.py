@@ -241,6 +241,31 @@ class OutcomeRow:
 
 
 @dataclass
+class Pick:
+    """Один из двух лучших исходов босса по матчу."""
+    selection: str
+    p: float  # вероятность босса после ограничения ±8 п.п. от рынка
+    p_market: float
+    odds: float  # средний кэф из досье
+    edge: float
+    min_odds: float
+    positive: bool  # перевес не меньше MIN_EDGE
+    stake: float  # рекомендованная (или бумажная) сумма
+    note: str  # слово финансиста
+    rank: int = 0
+    signal_id: int | None = None
+
+
+@dataclass
+class TopPicks:
+    ctx: "MatchContext"
+    num: int
+    picks: list[Pick]
+    replaced: bool = False
+    confidence: str = "medium"
+
+
+@dataclass
 class AnalysisResult:
     ctx: MatchContext
     news: NewsReport | None = None
@@ -695,9 +720,10 @@ class Engine:
             +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
-            f"4. Если есть ставка с перевесом от {settings.min_edge:.0%}, последней строкой дай команду для бота:\n"
-            f"/verdict {num} <{'|'.join(ctx.sport.outcomes)}> <вероятность 0-1> <low|medium|high>\n"
-            "Если ставки нет — так и скажи, без команды.",
+            f"4. Выбери ДВА лучших исхода: сначала с перевесом от {settings.min_edge:.0%}, если таких нет — "
+            "с наибольшим перевесом из оставшихся. Последней строкой — команда для бота:\n"
+            f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
+            f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
         ])
 
     async def candidates(self) -> tuple[list[MatchContext], list[tuple[int, MatchContext]]]:
@@ -726,36 +752,108 @@ class Engine:
                 raise ValueError("Матч скоро начнётся или уже идёт. Работаем только в прематче.")
             return self.save_candidate(ctx), ctx
 
-    def manual_verdict(self, num: int, selection: str, probability: float, confidence: str) -> AnalysisResult:
-        """Вердикт босса из чата -> проверки и расчёт финансиста -> сигнал."""
+    def manual_top(self, num: int, picks: list[tuple[str, float]], confidence: str = "medium") -> TopPicks:
+        """Вердикт босса из чата: два лучших исхода матча -> финансист -> два прогноза в журнал.
+
+        Прогнозы записываются всегда, даже без перевеса: так статистика честно покажет, как работают
+        и ставки с перевесом, и «лучшие из оставшихся». Исходы с перевесом идут первыми.
+        Повторный /verdict по тому же матчу заменяет прежние прогнозы, пока вы их не отметили.
+        """
         ctx = self.load_candidate(num)
         if ctx is None:
-            raise ValueError(f"Досье #{num} не найдено (или устарело). Запросите новое.")
+            raise ValueError(f"Досье #{num} не найдено (или устарело). Запросите новое: «🔍 Анализ».")
+        if not is_prematch(ctx.event.kickoff):
+            raise ValueError("До начала матча меньше часа: работаем только в прематче, прогноз не записываю.")
+        if not 1 <= len(picks) <= 2:
+            raise ValueError("Нужно один или два исхода.")
+        if len({sel for sel, _ in picks}) != len(picks):
+            raise ValueError("Исходы в вердикте повторяются.")
         fair = ctx.market.fair
-        if selection not in fair:
-            raise ValueError("По этому исходу нет линии букмекеров.")
-        try:
-            group = group_of(ctx.sport, selection)
-        except ValueError:
-            raise ValueError(f"Для этого вида спорта нет исхода «{selection}».") from None
+        for sel, _ in picks:
+            if sel not in ctx.sport.outcomes:
+                raise ValueError(f"Для этого вида спорта нет исхода «{sel}».")
+            if sel not in fair or not ctx.market.avg_odds.get(sel):
+                raise ValueError(f"По исходу {ctx.short(sel)} нет линии букмекеров.")
+
+        old = self.db.boss_picks(ctx.event.event_id)
+        if any(s.user_decision != "pending" or s.status != "pending" for s in old):
+            raise ValueError("По этому матчу вы уже отметили прогноз босса: новый вердикт не принимаю.")
+
+        # вероятности босса по всем исходам: выбранные — как сказал босс, остальные в том же рынке
+        # делят остаток пропорционально рынку
         probs = {o: fair.get(o, 0.5) for o in ctx.sport.outcomes}
-        rest = sum(fair[o] for o in group if o != selection)
-        for o in group:
-            probs[o] = probability if o == selection else fair[o] * (1 - probability) / rest
+        chosen = dict(picks)
+        for group in ctx.sport.groups:
+            fixed = {o: chosen[o] for o in group if o in chosen}
+            if not fixed:
+                continue
+            left = 1 - sum(fixed.values())
+            others = [o for o in group if o not in fixed]
+            if left <= 0 or (not others and abs(left) > 0.02):
+                raise ValueError("Вероятности исходов одного рынка в сумме больше 100%.")
+            rest = sum(fair.get(o, 0) for o in others)
+            for o in group:
+                probs[o] = fixed[o] if o in fixed else (fair.get(o, 0) * left / rest if rest else 0)
         res = AnalysisResult(ctx=ctx)
-        cands = ctx.quant_candidates()
-        res.candidate = cands[0][0] if cands else None
         res.verdict = ChiefVerdict(
             outcomes=[ChiefOutcome(selection=o, probability=probs[o], comment="") for o in ctx.sport.outcomes],
-            decision="bet",
-            selection=selection,
-            confidence=confidence,
-            reasoning=f"Полный разбор с субагентами — в чате с боссом (досье #{num}).",
-            pros=[],
-            cons=[],
+            decision="bet", selection=picks[0][0], confidence=confidence,
+            reasoning=f"Полный разбор с субагентами — в чате с боссом (досье #{num}).", pros=[], cons=[],
         )
-        self._finalize(res)
-        return res
+        self._build_table(res)
+
+        bank = self.db.bankroll()
+        unit = round_stake(bank * settings.paper_stake_pct)
+        state = self.db.risk_state()
+        made: list[Pick] = []
+        for sel, _ in picks:
+            row = res.table[sel]
+            p, odds, ev = row.p_final, row.odds, row.edge or 0.0
+            positive = ev >= settings.min_edge and settings.min_odds <= odds <= settings.max_odds
+            if positive:
+                sd = decide_stake(p, odds, state, settings)
+                if sd.allowed:
+                    stake, note = sd.stake, f"рекомендую {sd.stake_pct:.1%} банка"
+                else:
+                    stake, note = unit, "финансист: " + sd.reason
+            else:
+                stake = unit
+                note = ("перевеса нет: если ставить, то не больше "
+                        f"{settings.paper_stake_pct:.1%} банка, на свой риск")
+                if not settings.min_odds <= odds <= settings.max_odds and ev >= settings.min_edge:
+                    note = f"кэф вне диапазона {settings.min_odds}–{settings.max_odds}; " + note
+            # для ставок с перевесом — минимальный кэф с перевесом от MIN_EDGE, для прочих — «в ноль»
+            min_odds = min_acceptable_odds(p, settings.min_edge) if ev >= settings.min_edge else 1 / p
+            made.append(Pick(sel, p, row.p_market, odds, ev, round(min_odds, 2), positive, stake, note))
+        made.sort(key=lambda x: not x.positive)  # с перевесом — первыми
+
+        self.db.delete_signals([s.id for s in old])
+        for rank, pk in enumerate(made, 1):
+            row = res.table[pk.selection]
+            pk.rank = rank
+            pk.signal_id = self.db.add_signal(
+                event_id=ctx.event.event_id,
+                league_code=ctx.event.league.fd_code,
+                league_name=ctx.event.league.name_ru,
+                home=ctx.event.home_team,
+                away=ctx.event.away_team,
+                kickoff=ctx.event.kickoff.isoformat(),
+                selection=pk.selection,
+                odds_ref=pk.odds,
+                min_odds=pk.min_odds,
+                p_final=round(pk.p, 4),
+                p_market=round(pk.p_market, 4),
+                p_model=round(row.p_model, 4) if row.p_model is not None else None,
+                edge=round(pk.edge, 4),
+                stake=pk.stake,
+                confidence=confidence,
+                reasoning=f"Топ-{rank} босса по досье #{num}",
+                sport=ctx.sport.key,
+                line=ctx.line(pk.selection),
+                source="boss",
+                pick_rank=rank,
+            )
+        return TopPicks(ctx=ctx, num=num, picks=made, replaced=bool(old), confidence=confidence)
 
     # ---------- ваши ставки из досье ----------
     def _dossier_ctx(self, num: int) -> MatchContext:
@@ -859,7 +957,7 @@ class Engine:
                 paper = real = 0.0
             else:
                 won = outcome == "won"
-                paper = s.stake * (s.min_odds - 1) if won else -s.stake
+                paper = s.stake * (s.paper_odds - 1) if won else -s.stake
                 real = 0.0
                 if s.placed and s.actual_stake:
                     real = s.actual_stake * ((s.actual_odds or s.min_odds) - 1) if won else -s.actual_stake

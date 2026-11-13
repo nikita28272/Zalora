@@ -128,7 +128,9 @@ def _markups(session):
     return [m.reply_markup for m in session.sent if isinstance(m, SendMessage)]
 
 
-def test_dossier_placed_flow_records_user_bet_and_boss_verdict_separately():
+def test_dossier_then_top2_verdict_with_buttons_per_pick():
+    from aiogram.methods import EditMessageReplyMarkup
+
     bot, dp, session, db, engine, ctx = _setup_with_match()
 
     asyncio.run(dp.feed_update(bot, _msg(handlers.BTN_ANALYZE)))
@@ -136,36 +138,50 @@ def test_dossier_placed_flow_records_user_bet_and_boss_verdict_separately():
     assert pick.startswith("pick:")
 
     asyncio.run(dp.feed_update(bot, _cb(pick)))
-    dossier_msgs = [m for m in session.sent if isinstance(m, SendMessage) and "ДОСЬЕ #" in m.text]
-    kb = dossier_msgs[-1].reply_markup.inline_keyboard[0]
-    assert [b.text for b in kb] == ["✅ Ставил", "❌ Не ставил"]  # кнопки сразу под досье
+    dossier = [m for m in session.sent if isinstance(m, SendMessage) and "ДОСЬЕ #" in m.text][-1]
+    assert dossier.reply_markup is None  # под досье кнопок нет: они появятся под вердиктом
+    num = int(dossier.text.split("ДОСЬЕ #")[1].split()[0])
 
-    asyncio.run(dp.feed_update(bot, _cb(kb[0].callback_data)))  # ✅ Ставил
-    outcomes = _markups(session)[-1].inline_keyboard
-    labels = [b.text for row in outcomes for b in row]
-    assert labels[:3] == ["П1", "X", "П2"]
+    # босс дал два исхода; второй без перевеса
+    under = ctx.market.fair["under"]
+    asyncio.run(dp.feed_update(bot, _msg(f"/verdict {num} under {under:.3f} home 0.56 medium")))
+    reply = [m for m in session.sent if isinstance(m, SendMessage)][-1]
+    assert "Топ-2 босса" in reply.text
+    rows = reply.reply_markup.inline_keyboard
+    assert [[b.text for b in r] for r in rows] == [["✅ Сделал: П1", "❌ Не ставил"],
+                                                  ["✅ Сделал: ТМ2.5", "❌ Не ставил"]]
 
-    away = next(b for row in outcomes for b in row if b.text == "П2")
-    asyncio.run(dp.feed_update(bot, _cb(away.callback_data)))
-    asyncio.run(dp.feed_update(bot, _msg("3.70 250")))
-    user_bet = db.find_signal(ctx.event.event_id, "away", "user")
-    assert user_bet.placed and user_bet.actual_odds == 3.70 and user_bet.actual_stake == 250
+    # «✅ Сделал» по первому исходу: кэф и сумма
+    asyncio.run(dp.feed_update(bot, _cb(rows[0][0].callback_data)))
+    assert "По какому коэффициенту" in _texts(session)[-1]
+    asyncio.run(dp.feed_update(bot, _msg("2.20 300")))
+    home = db.find_signal(ctx.event.event_id, "home", "boss")
+    assert home.placed and home.actual_odds == 2.20 and home.actual_stake == 300
     assert "Финансист записал" in _texts(session)[-1]
 
-    # прогноз босса на другой исход — отдельная запись, в бумажную статистику
-    num = int(kb[0].callback_data.split(":")[1])
-    asyncio.run(dp.feed_update(bot, _msg(f"/verdict {num} home 0.56 medium")))
-    boss = db.find_signal(ctx.event.event_id, "home", "boss")
-    assert boss is not None and boss.user_decision == "pending"
+    # «❌ Не ставил» по второму: прогноз остаётся для статистики
+    asyncio.run(dp.feed_update(bot, _cb(rows[1][1].callback_data)))
+    assert db.find_signal(ctx.event.event_id, "under", "boss").user_decision == "skipped"
+    assert "статистику" in _texts(session)[-1]
+
+    # повторный вердикт после отметок не принимается
+    asyncio.run(dp.feed_update(bot, _msg(f"/verdict {num} away 0.3")))
+    assert "уже отметили" in _texts(session)[-1]
+    assert not any(isinstance(m, EditMessageReplyMarkup) for m in session.sent)  # у тестовых кнопок разметки нет
 
 
-def test_dossier_skip_marks_boss_prediction_not_placed():
+def test_bad_verdict_shows_usage():
+    bot, dp, session, db, engine, ctx = _setup_with_match()
+    asyncio.run(dp.feed_update(bot, _msg("/verdict 5 home")))
+    assert "Формат" in _texts(session)[-1]
+
+
+def test_old_dossier_skip_button_still_works():
     bot, dp, session, db, engine, ctx = _setup_with_match()
     num = engine.save_candidate(ctx)
-    res = engine.manual_verdict(num, "home", 0.56, "medium")
-    assert res.signal_id
+    top = engine.manual_top(num, [("home", 0.56)], "medium")
     asyncio.run(dp.feed_update(bot, _cb(f"dbet:{num}:skip")))
-    assert db.signal(res.signal_id).user_decision == "skipped"
+    assert db.signal(top.picks[0].signal_id).user_decision == "skipped"
     assert "статистику" in _texts(session)[-1]
 
 
@@ -179,3 +195,15 @@ def test_morning_message_has_analyze_button():
     asyncio.run(handlers.run_morning_matches(bot, engine, OWNER))
     msg = [m for m in session.sent if isinstance(m, SendMessage)][-1]
     assert "Матчи на" in msg.text and msg.reply_markup.inline_keyboard[0][0].callback_data == "menu:analyze"
+
+
+def test_pressed_pick_row_is_removed():
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="a", callback_data="bet:1:placed"), InlineKeyboardButton(text="b", callback_data="bet:1:skip")],
+        [InlineKeyboardButton(text="c", callback_data="bet:12:placed"), InlineKeyboardButton(text="d", callback_data="bet:12:skip")],
+    ])
+    left = handlers._without(kb, 1)
+    assert [b.callback_data for r in left.inline_keyboard for b in r] == ["bet:12:placed", "bet:12:skip"]
+    assert handlers._without(left, 12) is None

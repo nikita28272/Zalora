@@ -8,7 +8,7 @@ from ..agents.schemas import OutcomeView
 from ..config import settings
 from ..db import Signal, Summary, summarize
 from ..data.odds import Quota, ScanReport
-from ..pipeline import AnalysisResult, MatchContext, local
+from ..pipeline import AnalysisResult, MatchContext, TopPicks, local
 from ..sports import SPORTS, sel_short
 
 LEVEL_RU = {"low": "низкая", "medium": "средняя", "high": "высокая"}
@@ -67,10 +67,11 @@ FLOW_API = """<b>Ваш порядок действий</b>
 FLOW_MANUAL = f"""<b>Как это работает</b>
 1. В {settings.scan_time} бот присылает матчи футбола и хоккея на {settings.lookahead_hours} часов.
 2. «🔍 Анализ» → номер матча → досье. Копируете его и отправляете в чат с Claude (боссу).
-3. Строку <code>/verdict …</code> из ответа босса отправляете сюда: прогноз попадёт в статистику.
-4. Под досье — «✅ Ставил» (исход, кэф и сумма) или «❌ Не ставил».
-5. В {settings.settle_time} — итоги только по матчам с прогнозами: ваши ставки меняют банк,
-   остальные прогнозы идут в статистику 📊."""
+3. Босс разбирает все исходы и даёт 2 лучших (с перевесом — первыми). Строку <code>/verdict …</code>
+   из его ответа отправляете сюда.
+4. Бот показывает эти 2 исхода. Под каждым — «✅ Сделал» (потом кэф и сумма) или «❌ Не ставил».
+5. В {settings.settle_time} — итоги по этим исходам: ваши ставки меняют банк,
+   остальные прогнозы идут в статистику 📊 на бумаге."""
 
 
 def help_text() -> str:
@@ -89,8 +90,11 @@ def _money(x: float) -> str:
     return f"{x:,.0f}".replace(",", " ")
 
 
-def _sig_short(s: Signal) -> str:
+def sig_short(s: Signal) -> str:
     return sel_short(SPORTS.get(s.sport, SPORTS["football"]), s.selection, s.line)
+
+
+_sig_short = sig_short
 
 
 def _sig_emoji(s: Signal) -> str:
@@ -255,6 +259,8 @@ def signal_line(s: Signal) -> str:
     status = {"pending": "⏳", "won": "✅", "lost": "❌", "void": "↩️"}[s.status]
     if s.placed:
         bet = f"{_money(s.actual_stake or 0)} по {s.actual_odds or s.min_odds:.2f}"
+    elif s.source == "boss" and not s.positive:
+        bet = f"кэф {s.odds_ref:.2f}, без перевеса, {DECISION_RU[s.user_decision]}"
     else:
         bet = f"от {s.min_odds:.2f}, {DECISION_RU[s.user_decision]}"
     tail = ""
@@ -271,7 +277,9 @@ def signal_line(s: Signal) -> str:
 
 def placed_confirmation(s: Signal, bank: float, in_play: tuple[int, float]) -> str:
     warn = ""
-    if s.actual_odds and s.actual_odds < s.min_odds:
+    if s.source == "boss" and not s.positive:
+        warn = "\n⚪ Это прогноз без перевеса: ставка на ваш риск."
+    elif s.actual_odds and s.actual_odds < s.min_odds:
         warn = (
             f"\n⚠️ Коэффициент {s.actual_odds:.2f} ниже минимального {s.min_odds:.2f}: "
             "по нашей оценке у этой ставки нет перевеса."
@@ -291,18 +299,25 @@ def settle_report(settled: list[Signal], bank: float) -> str:
     for s in settled:
         by_event.setdefault(s.event_id, []).append(s)
     real_total = 0.0
+    boss_total = [0, 0]  # рассчитано, зашло
     for group in by_event.values():
         first = group[0]
         score = first.score if first.score and first.score != "нет данных" else "результат не найден"
         lines += ["", f"{_sig_emoji(first)} <b>{escape(first.home)} — {escape(first.away)}</b>: {escape(score)}"]
-        for s in sorted(group, key=lambda x: x.source != "boss"):
+        for s in sorted(group, key=lambda x: (x.source != "boss", x.pick_rank or 99)):
             mark = {"won": "✅ зашла", "lost": "❌ не зашла", "void": "↩️ возврат"}.get(s.status, s.status)
             label = escape(_sig_short(s))
             if s.source == "boss":
-                line = f"   🧠 Прогноз: {label} — {mark}"
-                if s.status in ("won", "lost"):
-                    line += f" (на бумаге {s.paper_profit:+,.0f})".replace(",", " ")
+                rank = f" {s.pick_rank}" if s.pick_rank else ""
+                line = f"   🧠 Прогноз{rank}: {label} — {mark}"
                 lines.append(line)
+                if s.status in ("won", "lost"):
+                    boss_total[0] += 1
+                    boss_total[1] += s.status == "won"
+                    lines.append(
+                        f"      босс {s.p_final:.0%}, кэф {s.odds_ref:.2f}, "
+                        f"{'с перевесом' if s.positive else 'без перевеса'}; на бумаге {s.paper_profit:+,.0f}"
+                        .replace(",", " "))
                 if s.placed:
                     real_total += s.profit or 0
                     lines.append(f"   💰 Вы поставили {_money(s.actual_stake or 0)} по {s.actual_odds or s.min_odds:.2f}: "
@@ -313,7 +328,11 @@ def settle_report(settled: list[Signal], bank: float) -> str:
                 real_total += s.profit or 0
                 lines.append(f"   💰 Ваша ставка: {label} {_money(s.actual_stake or 0)} по "
                              f"{s.actual_odds or s.min_odds:.2f} — {mark}, {(s.profit or 0):+,.0f}".replace(",", " "))
-    lines += ["", f"💰 Итог по вашим ставкам: {real_total:+,.0f}. Банк: <b>{_money(bank)}</b>".replace(",", " ")]
+    if boss_total[0]:
+        lines += ["", f"🧠 Прогнозы босса: зашло {boss_total[1]} из {boss_total[0]}"]
+    lines += [f"💰 Итог по вашим ставкам: {real_total:+,.0f}. Банк: <b>{_money(bank)}</b>".replace(",", " ")]
+    if not boss_total[0]:
+        lines.insert(-1, "")
     return "\n".join(lines)
 
 
@@ -335,7 +354,7 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
     parts = [
         _summary_block("Ваши ставки за месяц", real_m),
         _summary_block("Ваши ставки за всё время", summarize(all_time, real=True)),
-        _summary_block("Прогнозы босса (на бумаге, по мин. кэфу)", summarize(all_time, real=False)),
+        _summary_block("Прогнозы босса (на бумаге)", summarize(all_time, real=False)),
         f"<b>Банк:</b> {_money(bankroll)}",
     ]
     if real_m and bankroll - real_m.profit > 0:
@@ -349,6 +368,13 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
             if sm:
                 per.append(f"  {SPORTS[key].emoji} {SPORTS[key].name_ru}: {sm.count} сигн., ROI {sm.roi:+.1%}")
         parts.insert(3, "<b>Сигналы системы по видам спорта</b>\n" + "\n".join(per))
+    boss = [s for s in all_time if s.source == "boss"]
+    pos, neg = summarize([s for s in boss if s.positive], False), summarize([s for s in boss if not s.positive], False)
+    if pos or neg:
+        split = []
+        for title, sm in (("✅ с перевесом", pos), ("⚪ без перевеса", neg)):
+            split.append(f"  {title}: " + (f"{sm.won} из {sm.count}, ROI {sm.roi:+.1%}" if sm else "пока нет"))
+        parts.insert(3, "<b>Прогнозы босса по типу</b>\n" + "\n".join(split))
     total = summarize(all_time, real=False)
     if total is None or total.count < 50:
         parts.append("<i>Меньше 50 рассчитанных сигналов: результат пока во многом случаен.</i>")
@@ -380,8 +406,35 @@ def dossier_message(text: str) -> str:
 
 DOSSIER_HINT = (
     "☝️ Нажмите «Копировать» в правом верхнем углу блока выше, затем вставьте текст в чат с Claude.\n"
-    "Строку <code>/verdict …</code> из ответа босса отправьте сюда."
+    "Босс назовёт 2 лучших исхода. Строку <code>/verdict …</code> из его ответа отправьте сюда — "
+    "появятся кнопки «✅ Сделал / ❌ Не ставил» по каждому исходу."
 )
+
+
+def top_picks(top: TopPicks, bank: float) -> str:
+    """Ответ на /verdict: два лучших исхода босса с советом финансиста."""
+    ctx = top.ctx
+    lines = [
+        f"🧠 <b>Топ-2 босса по досье #{top.num}</b>"
+        + (" (заменил прежний вердикт)" if top.replaced else ""),
+        f"{ctx.sport.emoji} {escape(ctx.title)} · {local(ctx.event.kickoff):%d.%m %H:%M}",
+    ]
+    for pk in top.picks:
+        tag = "✅ есть перевес" if pk.positive else "⚪ без перевеса"
+        lines += [
+            "",
+            f"<b>{pk.rank}. {escape(ctx.short(pk.selection))}</b> — {tag}",
+            f"   вероятность {pk.p:.0%} (рынок {pk.p_market:.0%}), кэф {pk.odds:.2f}, перевес {pk.edge:+.1%}",
+        ]
+        if pk.positive:
+            lines.append(f"   💰 {_money(pk.stake)} — {escape(pk.note)}; брать по кэфу не ниже {pk.min_odds:.2f}")
+        else:
+            lines.append(f"   💰 {escape(pk.note)} (≈{_money(pk.stake)}); в плюс только по кэфу от {pk.min_odds:.2f}")
+    if not any(pk.positive for pk in top.picks):
+        lines += ["", "⚠️ Перевеса нет ни в одном исходе: это лучшие из имеющихся, а не рекомендация ставить."]
+    lines += ["", f"Уверенность: {LEVEL_RU.get(top.confidence, top.confidence)}. Банк: {_money(bank)}.",
+              "Отметьте по каждому исходу 👇 Итог пришлю на следующий день."]
+    return "\n".join(lines)
 
 
 LOW_QUOTA = 50
