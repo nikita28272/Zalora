@@ -57,19 +57,36 @@ def round_stake(amount: float) -> float:
     return float(round(amount))
 
 
-def decide_stake(p: float, odds: float, state: RiskState, cfg: Settings) -> StakeDecision:
+def risk_block(state: RiskState, cfg: Settings) -> str | None:
+    """Причина, по которой финансист сегодня не даёт ставить (лимиты), или None."""
     if state.bankroll <= 0:
-        return StakeDecision(False, 0, 0, "Банк пуст. Задайте его командой /bank.")
+        return "Банк пуст. Задайте его командой /bank."
     if state.bets_today >= cfg.max_bets_per_day:
-        return StakeDecision(False, 0, 0, f"Лимит {cfg.max_bets_per_day} ставок в день исчерпан.")
+        return f"Лимит {cfg.max_bets_per_day} ставок в день исчерпан."
     if state.profit_today <= -cfg.daily_loss_limit_pct * state.bankroll:
-        return StakeDecision(False, 0, 0, "Дневной лимит убытка достигнут. Сегодня ставок больше нет.")
+        return "Дневной лимит убытка достигнут. Сегодня ставок больше нет."
     if cfg.stop_after_losses and state.losing_streak >= cfg.stop_after_losses:
-        return StakeDecision(
-            False, 0, 0,
-            f"{state.losing_streak} проигрышей подряд. Новые сигналы на паузе: сделайте перерыв "
-            "и посмотрите /stats. Снять паузу: /resume.",
-        )
+        return (f"{state.losing_streak} проигрышей подряд. Новые сигналы на паузе: сделайте перерыв "
+                "и посмотрите /stats. Снять паузу: /resume.")
+    return None
+
+
+def flat_stake(state: RiskState, cfg: Settings, pct: float) -> StakeDecision:
+    """Фиксированная доля банка (ставки «по анализу», без расчёта перевеса), с теми же лимитами."""
+    block = risk_block(state, cfg)
+    if block:
+        return StakeDecision(False, 0, 0, block)
+    pct = min(pct, cfg.max_stake_pct)
+    stake = round_stake(state.bankroll * pct)
+    if stake <= 0:
+        return StakeDecision(False, 0, 0, "Ставка получается слишком маленькой.")
+    return StakeDecision(True, stake, pct, f"фиксированно {pct:.1%} банка")
+
+
+def decide_stake(p: float, odds: float, state: RiskState, cfg: Settings) -> StakeDecision:
+    block = risk_block(state, cfg)
+    if block:
+        return StakeDecision(False, 0, 0, block)
 
     k = kelly(p, odds)
     if k <= 0:

@@ -186,3 +186,34 @@ def test_nba_dossier_verdict_and_settlement():
     assert by_sel["hcp_home"].status == "won" and by_sel["over"].status == "lost"  # 115:104, сумма 219
     report = fmt.settle_report(settled, db.bankroll())
     assert "🏀" in report and "115:104" in report
+
+
+# ---------- запасные пути загрузки ----------
+def test_espn_range_rejected_falls_back_to_days_and_cdn():
+    import httpx
+    from datetime import date
+
+    from bot.data.nba import NbaClient, parse_cdn_game
+
+    client = NbaClient()
+    calls = []
+    day_events = {"20261110": [_espn(10, datetime(2026, 11, 10, 0, 30, tzinfo=timezone.utc), HOME, "Miami Heat",
+                                     110, 100)]}
+
+    async def fetch(url, params, key, ttl):
+        calls.append(key)
+        req = httpx.Request("GET", url)
+        if key.startswith("r"):  # период одним запросом — ошибка
+            raise httpx.HTTPStatusError("bad", request=req, response=httpx.Response(400, request=req))
+        return {"events": day_events.get(key[1:], [])}
+
+    client._fetch = fetch
+    games = asyncio.run(client.games_between(date(2026, 11, 9), date(2026, 11, 11)))
+    assert [g.match_id for g in games] == [10] and calls[0].startswith("r") and len(calls) == 4
+
+    g = parse_cdn_game({"gameId": "0022600123", "gameStatus": 3, "gameStatusText": "Final/OT",
+                        "gameDateTimeUTC": "2026-11-12T00:30:00Z",
+                        "homeTeam": {"teamCity": "LA", "teamName": "Clippers", "score": 118},
+                        "awayTeam": {"teamCity": "Utah", "teamName": "Jazz", "score": 115}})
+    assert g.home == "LA Clippers" and g.decided == "OT" and g.final == (118, 115)
+    assert parse_cdn_game({"gameId": "0012600001", "gameStatus": 3}) is None  # предсезонка

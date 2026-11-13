@@ -111,37 +111,81 @@ def standings_from_results(results: list[Result]) -> list[StandingRow]:
     return rows
 
 
+CDN_SCHEDULE = "https://cdn.nba.com/static/json/staticData/scheduleLeagueV2.json"
+CDN_TYPES = ("002", "004", "005", "006")  # регулярка, плей-офф, плей-ин, финал Кубка НБА
+
+
+def parse_cdn_game(g: dict) -> Result | None:
+    """Матч из официального расписания НБА (запасной источник: только текущий сезон, без счёта четвертей)."""
+    try:
+        gid = str(g["gameId"])
+        if int(g.get("gameStatus", 0)) != 3 or not gid.startswith(CDN_TYPES):
+            return None
+        h, a = g["homeTeam"], g["awayTeam"]
+        fh, fa = int(h["score"]), int(a["score"])
+        decided = "OT" if "OT" in str(g.get("gameStatusText", "")).upper() else "REG"
+        return Result(
+            match_id=int(gid),
+            competition="NBA",
+            utc_date=datetime.fromisoformat(str(g["gameDateTimeUTC"]).replace("Z", "+00:00")),
+            home=f"{h['teamCity']} {h['teamName']}",
+            away=f"{a['teamCity']} {a['teamName']}",
+            home_goals=fh, away_goals=fa, final_home=fh, final_away=fa, decided=decided,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 class NbaClient:
     def __init__(self) -> None:
         self._cache: dict[str, tuple[float, object]] = {}
         self._lock = asyncio.Lock()
 
-    async def _get(self, dates: str, ttl: float) -> dict:
-        cached = self._cache.get(dates)
+    async def _fetch(self, url: str, params: dict | None, key: str, ttl: float) -> dict:
+        cached = self._cache.get(key)
         if cached and time.monotonic() - cached[0] < ttl:
             return cached[1]  # type: ignore[return-value]
         async with self._lock:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-                resp = await client.get(BASE_URL, params={"dates": dates, "limit": 1000})
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True,
+                                         headers={"User-Agent": "Mozilla/5.0"}) as client:
+                resp = await client.get(url, params=params)
             resp.raise_for_status()
             data = resp.json()
-        self._cache[dates] = (time.monotonic(), data)
+        self._cache[key] = (time.monotonic(), data)
         return data
 
+    async def _day(self, day: date, ttl: float) -> list[dict]:
+        try:
+            data = await self._fetch(BASE_URL, {"dates": f"{day:%Y%m%d}"}, f"d{day:%Y%m%d}", ttl)
+        except httpx.HTTPError as exc:
+            log.warning("ESPN NBA: день %s недоступен: %s", day, _why(exc))
+            return []
+        return data.get("events") or []
+
     async def _chunk(self, start: date, end: date, ttl: float) -> list[Result]:
-        """Матчи за период одним запросом; если пусто — по дням (на случай, если ESPN не примет период)."""
-        data = await self._get(f"{start:%Y%m%d}-{end:%Y%m%d}", ttl)
-        events = data.get("events") or []
-        if not events and (end - start).days >= 3:
-            events = []
+        """Матчи за период одним запросом; если ESPN его не принял или вернул пусто — по дням."""
+        events: list[dict] = []
+        try:
+            data = await self._fetch(BASE_URL, {"dates": f"{start:%Y%m%d}-{end:%Y%m%d}", "limit": 1000},
+                                     f"r{start:%Y%m%d}-{end:%Y%m%d}", ttl)
+            events = data.get("events") or []
+        except httpx.HTTPError as exc:
+            log.info("ESPN NBA: период %s–%s одним запросом не принят (%s), беру по дням", start, end, _why(exc))
+        if not events and (end - start).days >= 1:
             day = start
             while day <= end:
-                try:
-                    events += (await self._get(f"{day:%Y%m%d}", ttl)).get("events") or []
-                except httpx.HTTPError as exc:
-                    log.warning("ESPN NBA: день %s недоступен: %s", day, type(exc).__name__)
+                events += await self._day(day, ttl)
                 day += timedelta(days=1)
         return [r for r in (parse_event(e) for e in events) if r]
+
+    async def _cdn_season(self) -> list[Result]:
+        try:
+            data = await self._fetch(CDN_SCHEDULE, None, "cdn", 1800)
+        except httpx.HTTPError as exc:
+            log.warning("NBA CDN: расписание недоступно: %s", _why(exc))
+            return []
+        games = [g for d in (data.get("leagueSchedule") or {}).get("gameDates") or [] for g in d.get("games") or []]
+        return [r for r in (parse_cdn_game(g) for g in games) if r]
 
     async def games_between(self, start: date, end: date) -> list[Result]:
         out: dict[int, Result] = {}
@@ -151,12 +195,14 @@ class NbaClient:
             chunk_end = min(day + timedelta(days=CHUNK_DAYS - 1), end)
             # прошлые периоды не меняются — кешируем надолго, свежий — на 10 минут
             ttl = 600 if chunk_end + timedelta(days=2) >= today else 7 * 24 * 3600
-            try:
-                for r in await self._chunk(day, chunk_end, ttl):
-                    out[r.match_id] = r
-            except httpx.HTTPError as exc:
-                log.warning("ESPN NBA: период %s–%s недоступен: %s", day, chunk_end, type(exc).__name__)
+            for r in await self._chunk(day, chunk_end, ttl):
+                out[r.match_id] = r
             day = chunk_end + timedelta(days=1)
+        if not out and end >= season_start(today):
+            # ESPN недоступен — текущий сезон берём из официального расписания НБА
+            for r in await self._cdn_season():
+                if start <= r.utc_date.date() <= end + timedelta(days=1):
+                    out[r.match_id] = r
         return sorted(out.values(), key=lambda r: r.utc_date)
 
     async def season_results(self) -> list[Result]:
@@ -169,11 +215,17 @@ class NbaClient:
         start = season_start(today)
         previous = await self.games_between(date(start.year - 1, 10, 1), date(start.year, 6, 30))
         current = await self.games_between(start, today)
-        seen = {r.match_id for r in current}
-        return [r for r in previous if r.match_id not in seen] + current
+        seen = {(r.utc_date.date(), r.home) for r in current}
+        return [r for r in previous if (r.utc_date.date(), r.home) not in seen] + current
 
     async def standings(self) -> list[StandingRow]:
         return standings_from_results(await self.season_results())
 
     async def finished_between(self, date_from: date, date_to: date) -> list[Result]:
         return await self.games_between(date_from, date_to)
+
+
+def _why(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__

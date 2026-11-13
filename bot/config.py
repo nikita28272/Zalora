@@ -100,6 +100,13 @@ class Settings:
     max_model_gap: float = field(default_factory=lambda: _float("MAX_MODEL_GAP", 0.12))
     # Отбор матчей для разбора: сколько показывать наверху и с какой оценки перевеса (−1% = почти в ноль:
     # агенты и кэф вашей конторы могут довести такой исход до перевеса)
+    # НБА: «analysis» — ставки по анализу (агенты, новости, график), а не по перевесу над линией;
+    # «value» — как в остальных лигах
+    nba_mode: str = field(default_factory=lambda: _env("NBA_MODE", "analysis").lower())
+    nba_top: int = field(default_factory=lambda: _int("NBA_TOP", 3))  # сколько матчей НБА в день предлагать
+    nba_min_factor: float = field(default_factory=lambda: _float("NBA_MIN_FACTOR", 2.0))  # порог перекоса графика
+    nba_stake_pct: float = field(default_factory=lambda: _float("NBA_STAKE_PCT", 0.01))  # ставка при уверенном разборе
+    nba_max_prob_deviation: float = field(default_factory=lambda: _float("NBA_MAX_PROB_DEVIATION", 0.12))
     top_matches: int = field(default_factory=lambda: _int("TOP_MATCHES", 5))
     top_min_edge: float = field(default_factory=lambda: _float("TOP_MIN_EDGE", -0.01))
     max_prob_deviation: float = field(default_factory=lambda: _float("MAX_PROB_DEVIATION", 0.08))

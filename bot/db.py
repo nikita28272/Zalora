@@ -126,12 +126,18 @@ class Signal:
 
     @property
     def positive(self) -> bool:
-        """Прогноз с перевесом (не меньше порога MIN_EDGE)."""
+        """Прогноз с перевесом (не меньше порога MIN_EDGE).
+        НБА в режиме «по анализу»: «сильный» прогноз — средняя или высокая уверенность босса."""
+        if self.sport == "basketball" and settings.nba_mode == "analysis":
+            return self.confidence in ("medium", "high")
         return self.edge >= settings.min_edge - 1e-9
 
     @property
     def paper_odds(self) -> float:
-        """Кэф бумажного учёта: минимальный для ставок с перевесом, средний из досье для остальных."""
+        """Кэф бумажного учёта: минимальный для ставок с перевесом, средний из досье для остальных
+        (и для НБА «по анализу» — там минимальный кэф не считается)."""
+        if self.sport == "basketball" and settings.nba_mode == "analysis" and self.odds_ref:
+            return self.odds_ref
         return min(self.min_odds, self.odds_ref) if self.odds_ref else self.min_odds
 
 

@@ -27,9 +27,11 @@ from zoneinfo import ZoneInfo
 from .agents import team
 from .agents.llm import AgentError, AgentRun
 from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
-from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds, round_stake
+from .analysis.bankroll import (StakeDecision, decide_stake, edge, flat_stake, min_acceptable_odds,
+                                round_stake)
 from .analysis.market import MarketView, market_view
 from .analysis.basketball import NbaModel
+from .analysis.nba_factors import Factors, nba_factors
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, League, settings
 from .data import news
@@ -124,6 +126,8 @@ class MatchContext:
     away_form: str = ""
     home_last: list[str] = field(default_factory=list)
     away_last: list[str] = field(default_factory=list)
+    factors: Factors | None = None  # НБА: перекос графика (считается при загрузке матчей)
+    factors_text: str = ""  # то же текстом для досье (сохраняется в снимке)
 
     @property
     def title(self) -> str:
@@ -243,6 +247,8 @@ class MatchContext:
                 )
             if mo.note:
                 lines.append(f"  Особо: {mo.note}")
+        if self.factors_text:
+            lines.append(self.factors_text)
             for sel in self.sport.outcomes:
                 if sel in mo.probs:
                     lines.append(f"  {self.short(sel)}: {mo.probs[sel]:.1%}")
@@ -461,6 +467,10 @@ class Engine:
                         ctx.model.probs = sport_probs(event.league.sport, ctx.model.lambda_home,
                                                       ctx.model.lambda_away, mv.lines, ctx.model.draw_boost,
                                                       ctx.model.sds)
+                    if isinstance(model, NbaModel):
+                        margin = (ctx.model.lambda_home - ctx.model.lambda_away) if ctx.model else None
+                        ctx.factors = nba_factors(model.results, ctx.fd_home, ctx.fd_away, event.kickoff, margin)
+                        ctx.factors_text = ctx.factors.text()
                     ctx.home_form, ctx.away_form = model.form(ctx.fd_home), model.form(ctx.fd_away)
                     ctx.home_last, ctx.away_last = model.last_results(ctx.fd_home), model.last_results(ctx.fd_away)
             if rows:
@@ -592,7 +602,9 @@ class Engine:
             pf = final.get(sel)
             if pf is not None and pm is not None:
                 # защита от самоуверенности: не дальше MAX_PROB_DEVIATION от рынка
-                pf = min(max(pf, pm - settings.max_prob_deviation), pm + settings.max_prob_deviation)
+                dev = (settings.nba_max_prob_deviation if ctx.sport.key == "basketball"
+                       else settings.max_prob_deviation)
+                pf = min(max(pf, pm - dev), pm + dev)
                 pf = min(max(pf, 0.01), 0.99)
             res.table[sel] = OutcomeRow(
                 selection=sel,
@@ -720,6 +732,7 @@ class Engine:
             "home_row": row(ctx.home_row), "away_row": row(ctx.away_row),
             "home_form": ctx.home_form, "away_form": ctx.away_form,
             "home_last": ctx.home_last, "away_last": ctx.away_last,
+            "factors_text": ctx.factors_text,
         }
 
     @staticmethod
@@ -738,6 +751,7 @@ class Engine:
             home_row=row(snap["home_row"]), away_row=row(snap["away_row"]),
             home_form=snap["home_form"], away_form=snap["away_form"],
             home_last=snap["home_last"], away_last=snap["away_last"],
+            factors_text=snap.get("factors_text", ""),
         )
 
     def save_candidate(self, ctx: MatchContext) -> int:
