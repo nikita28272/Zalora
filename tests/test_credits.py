@@ -224,3 +224,13 @@ def test_first_daily_load_is_free_of_budget_repeats_are_limited(api):
     # «⏩ Загрузить отложенные»: бюджет не применяется
     asyncio.run(engine.load_matches(max_age_minutes=0, force=True))
     assert NHL.name_ru in engine.last_report.paid and not engine.last_report.budget_skipped
+
+
+def test_gated_league_still_listed_from_free_schedule():
+    rep = odds_mod.ScanReport(gated=["НБА"], schedule_only=[
+        ("НБА", "Boston Celtics", "LA Clippers", "2026-11-15T00:30:00Z")])
+    text = fmt.matches_list([], report=rep)
+    assert "НБА" in text and "Boston Celtics — LA Clippers" in text and "кредиты не тратились" in text
+    from bot.tg.handlers import nba_in_play
+    assert nba_in_play([], rep)
+    assert "нет матчей с заметным перекосом" in fmt.top_block([], [])

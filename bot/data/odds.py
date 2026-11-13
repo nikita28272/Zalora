@@ -140,6 +140,8 @@ class ScanReport:
     failed: list[str] = field(default_factory=list)
     gated: list[str] = field(default_factory=list)  # матчи есть, но разбирать нечего — линии не загружались
     reused: list[str] = field(default_factory=list)  # взяты из сохранённых (на диске) — кредиты не тратились
+    # матчи лиг без платных линий (из бесплатного расписания): (лига, хозяева, гости, начало UTC ISO)
+    schedule_only: list[tuple[str, str, str, str]] = field(default_factory=list)
     allowance: float | None = None  # сколько разрешено потратить на этот скан
     cached: bool = False  # линии взяты из кеша, кредиты не тратились
     fetched_at: str = ""  # когда линии были получены (UTC ISO)
@@ -284,6 +286,10 @@ class OddsClient:
                         need = True
                     if not need:
                         report.gated.append(league.name_ru)
+                        report.schedule_only += [
+                            (league.name_ru, str(e.get("home_team", "?")), str(e.get("away_team", "?")),
+                             str(e.get("commence_time", ""))) for e in free
+                        ]
                         continue
                 cost = market_cost(self.markets_for(league))
                 remaining = self.quota.remaining if self.quota else None

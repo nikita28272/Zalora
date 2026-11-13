@@ -113,9 +113,29 @@ def flag_of(m: MatchContext) -> str:
     return " 🔎" if m.quant_candidates() else ""
 
 
-def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
+def schedule_only_block(report: ScanReport | None) -> str:
+    """Матчи лиг, по которым линии не загружались (нечего разбирать): только расписание."""
+    if report is None or not report.schedule_only:
+        return ""
+    from datetime import datetime
+    lines = []
+    league = None
+    for name, home, away, when in sorted(report.schedule_only, key=lambda x: (x[0], x[3])):
+        if name != league:
+            league = name
+            lines.append(f"<b>{escape(name)}</b> — без линий: перекоса графика нет, кредиты не тратились")
+        try:
+            t = f"{local(datetime.fromisoformat(when.replace('Z', '+00:00'))):%d.%m %H:%M} "
+        except ValueError:
+            t = ""
+        lines.append(f"   {t}{escape(home)} — {escape(away)}")
+    return "\n".join(lines)
+
+
+def matches_list(matches: list[MatchContext], limit: int = 30, report: ScanReport | None = None) -> str:
+    extra = schedule_only_block(report)
     if not matches:
-        return "Ближайших матчей с линией не найдено."
+        return ("Ближайших матчей с линией не найдено." + ("\n\n" + extra if extra else ""))
     lines = ["<b>Ближайшие матчи</b> (рынок / модель, %)", ""]
     league = None
     for m in matches[:limit]:
@@ -133,6 +153,8 @@ def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
         )
     if len(matches) > limit:
         lines.append(f"…и ещё {len(matches) - limit}")
+    if extra:
+        lines += ["", extra]
     lines += ["", "🔎 — модель видит возможный перевес; 🏀 — НБА с перекосом графика. Разбор: «🔍 Анализ»."]
     return "\n".join(lines)
 

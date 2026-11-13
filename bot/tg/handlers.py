@@ -224,6 +224,12 @@ def _quick_row(top=None, nba=None) -> list[InlineKeyboardButton]:
     return row[:8]
 
 
+def nba_in_play(matches, report) -> bool:
+    """Есть ли сегодня НБА: с линиями или только в расписании (линии не грузили — нечего разбирать)."""
+    return any(m.sport.key == "basketball" for m in matches) or bool(
+        report and any(name == "НБА" for name, *_ in report.schedule_only))
+
+
 def force_row(report) -> list[InlineKeyboardButton]:
     """Кнопка «загрузить отложенные лиги», если бот отложил их ради дневного бюджета."""
     if report is None or report.cached or not report.budget_skipped:
@@ -350,7 +356,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         hint = "\nНажмите номер матча, чтобы получить досье." if not settings.api_mode else \
             "\nНажмите номер матча, чтобы агенты его разобрали."
         await send_long(message.bot, message.chat.id,
-                        fmt.matches_list(matches) + "\n" + (hint if matches else "") + "\n\n"
+                        fmt.matches_list(matches, report=engine.last_report) + "\n" + (hint if matches else "") + "\n\n"
                         + fmt.odds_footer(engine.last_report, engine.quota()),
                         with_force(matches_keyboard(matches), engine.last_report))
 
@@ -593,7 +599,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await message.answer("Ближайших матчей нет.")
             return
         top, nba = engine.top_for_analysis(), engine.nba_top()
-        has_nba = any(m.sport.key == "basketball" for m in engine.matches)
+        has_nba = nba_in_play(engine.matches, engine.last_report)
         lines = ["🔍 <b>Какой матч разобрать?</b>", "", fmt.top_block(top, nba if has_nba else None), "",
                  "<b>Все матчи</b>"]
         for m in engine.matches[:30]:
@@ -746,9 +752,9 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await cb.message.answer(f"Не удалось загрузить: {type(exc).__name__}")
             return
         top, nba = engine.top_for_analysis(), engine.nba_top()
-        has_nba = any(m.sport.key == "basketball" for m in matches)
+        has_nba = nba_in_play(matches, engine.last_report)
         await send_long(cb.message.bot, cb.message.chat.id,
-                        fmt.top_block(top, nba if has_nba else None) + "\n\n" + fmt.matches_list(matches)
+                        fmt.top_block(top, nba if has_nba else None) + "\n\n" + fmt.matches_list(matches, report=engine.last_report)
                         + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()),
                         matches_keyboard(matches, top, nba))
 
@@ -919,10 +925,10 @@ async def run_morning_matches(bot: Bot, engine: Engine, chat_id: int) -> None:
         await bot.send_message(chat_id, f"Не удалось загрузить матчи: {type(exc).__name__}")
         return
     top, nba = engine.top_for_analysis(matches), engine.nba_top(matches)
-    has_nba = any(m.sport.key == "basketball" for m in matches)
+    has_nba = nba_in_play(matches, engine.last_report)
     text = (f"☀️ <b>Матчи на {settings.lookahead_hours} часов</b>\n\n" + fmt.top_block(top, nba if has_nba else None)
             + "\n\n"
-            + fmt.matches_list(matches) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
+            + fmt.matches_list(matches, report=engine.last_report) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
     await send_long(bot, chat_id, text, with_force(analyze_button(top, nba) if matches else None, engine.last_report))
 
 
