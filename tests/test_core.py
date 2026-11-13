@@ -347,3 +347,48 @@ def test_old_database_is_migrated_with_sources(tmp_path):
                 confidence="user", reasoning="r")
     # тот же матч и исход, но ставка владельца — теперь допустимо
     assert db.add_signal(event_id="e1", selection="home", source="user", **base) is not None
+
+
+def test_corrupted_quotes_are_dropped():
+    from bot.analysis.market import clean_books
+
+    books = [
+        BookOdds.football("pinnacle", 1.62, 4.0, 5.2),
+        BookOdds.football("b1", 1.60, 3.9, 5.0),
+        BookOdds.football("b2", 1.58, 4.1, 5.3),
+        BookOdds.football("arb", 1.93, 4.5, 3.28),  # невозможная линия: сумма вероятностей < 100%
+        BookOdds.football("odd", 2.60, 3.4, 2.60),  # с маржой, но далеко от рынка — выброс
+    ]
+    pts = {"home": None, "draw": None, "away": None}
+    kept = {b.bookmaker for b in clean_books(books, ("home", "draw", "away"), pts)}
+    assert kept == {"pinnacle", "b1", "b2"}
+
+
+def test_hockey_moneyline_ignores_regulation_prices_under_h2h():
+    from bot.config import LEAGUES_BY_ODDS_KEY
+    from bot.data.odds import parse_event
+
+    def book(key, h, a):
+        return {"key": key, "markets": [{"key": "h2h", "outcomes": [
+            {"name": "Vegas Golden Knights", "price": h}, {"name": "Nashville Predators", "price": a}]}]}
+
+    raw = {"id": "x", "commence_time": "2026-11-14T03:10:00Z", "home_team": "Vegas Golden Knights",
+           "away_team": "Nashville Predators",
+           "bookmakers": [book("pinnacle", 1.56, 2.58), book("b1", 1.53, 2.62), book("b2", 1.55, 2.55),
+                          book("b3", 1.54, 2.60), book("bad", 1.93, 3.55)]}  # «bad» отдал кэфы основного времени
+    mv = market_view(parse_event(raw, LEAGUES_BY_ODDS_KEY["icehockey_nhl"]))
+    assert mv.best_odds["ml_away"] < 2.7 and mv.avg_odds["ml_away"] < 2.65
+
+
+def test_model_far_from_market_is_not_a_candidate():
+    from bot.analysis.poisson import ModelOutput
+    from bot.config import LEAGUES
+    from bot.pipeline import MatchContext
+
+    ev = Event("e", LEAGUES[0], NOW + timedelta(days=1), "A", "B",
+               [BookOdds.football("pinnacle", 1.62, 4.0, 5.2), BookOdds.football("b1", 1.60, 3.9, 5.0)])
+    mv = market_view(ev)
+    far = ModelOutput(1.2, 1.4, {"home": 0.40, "draw": 0.27, "away": 0.33}, 10, 10)  # П2: модель 33% vs рынок ~19%
+    ctx = MatchContext(1, ev, mv, far)
+    assert ctx.quant_candidates() == []
+    assert ctx.model_gap("away") > 0.12

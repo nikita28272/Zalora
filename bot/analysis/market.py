@@ -19,6 +19,11 @@ SHARP_BOOKS = ("pinnacle", "betfair_ex_eu", "matchbook")
 # Хоккей: доля ничьих в основное время в НХЛ — около 22–24%. Нужна, только если
 # в линии нет 1X2 основного времени и его приходится оценивать по П1/П2 с ОТ.
 NHL_REG_DRAW = 0.23
+
+# Отсев испорченных котировок. Честная линия всегда с маржой: сумма 1/кэф ≥ 1.
+# Меньше — значит букмекер отдал под этим рынком другой (например, основное время вместо «с ОТ»).
+MAX_BOOK_MARGIN = 0.25  # шире — подозрительно (ошибка данных или экзотическая линия)
+MAX_DEVIATION = 0.10  # котировка, которая расходится с медианой рынка больше чем на 10 п.п., — выброс
 ESTIMATED_MARGIN = 0.07  # типичная маржа букмекера на 1X2 в хоккее — для оценочного кэфа
 
 
@@ -84,6 +89,20 @@ def _point(selection: str, lines: dict[str, float]) -> float | None:
     return None
 
 
+def clean_books(books: list[BookOdds], group: tuple[str, ...], pts: dict) -> list[BookOdds]:
+    """Выбрасываем невозможные и выбивающиеся котировки, чтобы они не портили средний и лучший кэф."""
+    sane = []
+    for b in books:
+        m = margin([b.price(s, pts[s]) for s in group])
+        if 0 <= m <= MAX_BOOK_MARGIN:
+            sane.append(b)
+    if len(sane) < 3:
+        return sane
+    per_book = {id(b): devig([b.price(s, pts[s]) for s in group]) for b in sane}
+    med = [median(p[i] for p in per_book.values()) for i in range(len(group))]
+    return [b for b in sane if max(abs(per_book[id(b)][i] - med[i]) for i in range(len(group))) <= MAX_DEVIATION]
+
+
 def market_view(event: Event) -> MarketView | None:
     sport = SPORTS[event.league.sport]
     lines = _pick_lines(sport, event.books)
@@ -101,7 +120,9 @@ def market_view(event: Event) -> MarketView | None:
         ):
             continue  # нет основной линии для тотала/форы
         pts = {s: _point(s, lines) for s in group}
-        books = [b for b in event.books if all(b.price(s, pts[s]) for s in group)]
+        books = clean_books(
+            [b for b in event.books if all(b.price(s, pts[s]) for s in group)], group, pts
+        )
         if not books:
             continue
         sharp = [b for b in books if b.bookmaker in SHARP_BOOKS]

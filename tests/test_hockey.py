@@ -38,7 +38,7 @@ def _book(key, ml_h, ml_a, total, over, under, hcp, hcp_h, hcp_a, three_way=None
 
 
 def _raw(kickoff, three_way=True):
-    tw = (2.45, 4.10, 2.90) if three_way else None
+    tw = (2.40, 4.00, 2.85) if three_way else None  # с обычной маржой ~2%
     return {
         "id": "nhl-1",
         "commence_time": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -56,7 +56,7 @@ def _raw(kickoff, three_way=True):
 def test_parse_hockey_markets_and_main_lines():
     ev = parse_event(_raw(NOW + timedelta(days=1)), NHL)
     b = ev.books[0]
-    assert b.price("ml_home") == 1.80 and b.price("home") == 2.45 and b.price("draw") == 4.10
+    assert b.price("ml_home") == 1.80 and b.price("home") == 2.40 and b.price("draw") == 4.00
     assert b.price("over", 6.5) == 2.05 and b.price("hcp_home", -1.5) == 2.70 and b.price("hcp_away", 1.5) == 1.50
 
     mv = market_view(ev)
@@ -181,3 +181,22 @@ def test_wrong_outcome_for_sport_is_rejected():
     num = engine.save_candidate(fb)
     with pytest.raises(ValueError):
         engine.manual_verdict(num, "home_or_what", 0.5, "low")
+
+
+def test_diag_report_runs(monkeypatch, capsys):
+    from bot import diag
+    from bot.data import nhl
+
+    base = NOW - timedelta(days=30)
+    games = []
+    for i in range(12):
+        h, a = ("Vegas Golden Knights", "Nashville Predators") if i % 2 else ("Nashville Predators", "Vegas Golden Knights")
+        games.append(Result(i, "NHL", base + timedelta(days=i), h, a, 3, 2 if i % 3 else 3, None, None, "REG"))
+
+    async def fake_results(self):
+        return games
+
+    monkeypatch.setattr(nhl.NhlClient, "season_results", fake_results)
+    assert asyncio.run(diag.main(["NHL", "Vegas", "Nashville"])) == 0
+    out = capsys.readouterr().out
+    assert "атака" in out and "Прогноз модели" in out and "ml_home" in out

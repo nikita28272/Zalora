@@ -93,6 +93,10 @@ class Settings:
 
     # --- модель и сигналы ---
     min_edge: float = field(default_factory=lambda: _float("MIN_EDGE", 0.03))
+    # насколько модель может сдвинуть оценку рынка: 0.35 — на треть разницы между ними
+    model_weight: float = field(default_factory=lambda: _float("MODEL_WEIGHT", 0.35))
+    # расхождение модели с рынком больше этого — почти всегда ошибка модели: такой исход не кандидат
+    max_model_gap: float = field(default_factory=lambda: _float("MAX_MODEL_GAP", 0.12))
     max_prob_deviation: float = field(default_factory=lambda: _float("MAX_PROB_DEVIATION", 0.08))
     min_odds: float = field(default_factory=lambda: _float("MIN_ODDS", 1.40))
     max_odds: float = field(default_factory=lambda: _float("MAX_ODDS", 4.50))

@@ -137,13 +137,23 @@ class MatchContext:
         return sel_ru(self.sport, sel, self.line(sel))
 
     def p_quant(self, sel: str) -> float | None:
-        """Средняя вероятность рынка и модели — «количественная» оценка до агентов."""
+        """Оценка до агентов: рынок, сдвинутый в сторону модели на долю MODEL_WEIGHT.
+
+        Линия топ-лиг точнее модели на 20 матчах, поэтому модель лишь корректирует рынок.
+        """
         pm = self.market.fair.get(sel)
         if pm is None:
             return None
         if self.model is None or sel not in self.model.probs:
             return pm
-        return (pm + self.model.probs[sel]) / 2
+        return pm + settings.model_weight * (self.model.probs[sel] - pm)
+
+    def model_gap(self, sel: str) -> float | None:
+        """На сколько модель расходится с рынком по исходу."""
+        pm = self.market.fair.get(sel)
+        if pm is None or self.model is None or sel not in self.model.probs:
+            return None
+        return self.model.probs[sel] - pm
 
     def quant_candidates(self) -> list[tuple[str, float]]:
         """Исходы с перевесом не меньше MIN_EDGE по модели+рынку, лучший первым."""
@@ -153,6 +163,9 @@ class MatchContext:
         for sel, odds in self.market.avg_odds.items():
             if sel in self.market.estimated:  # оценочный кэф — не повод для кандидата
                 continue
+            gap = self.model_gap(sel)
+            if gap is not None and abs(gap) > settings.max_model_gap:
+                continue  # модель слишком далеко от рынка — скорее ошибка модели, чем находка
             if not (settings.min_odds <= odds <= settings.max_odds):
                 continue
             p = self.p_quant(sel)
