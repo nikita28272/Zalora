@@ -118,8 +118,8 @@ class Settings:
     # в футболе составы объявляют за час до начала
     late_check_hockey_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_HOCKEY_MINUTES", 120))
     late_check_football_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_FOOTBALL_MINUTES", 50))
-    # Ночью напоминания не присылаем: «0-7» — с 00:00 до 07:00 по TIMEZONE; пусто — присылать всегда
-    quiet_hours: str = field(default_factory=lambda: _env("QUIET_HOURS", "0-7"))
+    # Тихие часы для напоминаний: «0-7» — не присылать с 00:00 до 07:00 по TIMEZONE; пусто (по умолчанию) — присылать всегда
+    quiet_hours: str = field(default_factory=lambda: _env("QUIET_HOURS", ""))
 
     # --- банкролл и лимиты (финансист) ---
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))
