@@ -199,7 +199,7 @@ def test_saved_lines_survive_restart_and_free_budget_for_next_league(api):
     assert "из сохранённых бесплатно" in fmt.scan_report_line(engine2.last_report)
 
 
-def test_force_loads_budget_skipped_leagues(api):
+def test_first_daily_load_is_free_of_budget_repeats_are_limited(api):
     from bot.tg.handlers import force_row
 
     db = DB(":memory:")
@@ -211,10 +211,16 @@ def test_force_loads_budget_skipped_leagues(api):
     engine._league_data = no_stats
     engine.scan_allowance = lambda: 0  # дневной бюджет исчерпан
     asyncio.run(engine.load_matches())
-    assert engine.last_report.budget_skipped == [NHL.name_ru]  # первая лига взята, вторая отложена
-    assert force_row(engine.last_report)[0].callback_data == "odds:force"
+    # первая загрузка за день: обе лиги, несмотря на бюджет
+    assert engine.last_report.paid == [PL.name_ru, NHL.name_ru] and not engine.last_report.budget_skipped
+
+    # повторное обновление в тот же день (линии устарели) — бюджет действует: вторая лига отложена
     used = api.used
-    asyncio.run(engine.load_matches(force=True))
-    assert engine.last_report.reused == [PL.name_ru]  # уже загруженная лига — бесплатно с диска
-    assert engine.last_report.paid == [NHL.name_ru] and api.used == used + 3
-    assert force_row(engine.last_report) == []
+    asyncio.run(engine.load_matches(max_age_minutes=0))
+    assert engine.last_report.paid == [PL.name_ru] and engine.last_report.budget_skipped == [NHL.name_ru]
+    assert force_row(engine.last_report)[0].callback_data == "odds:force"
+    assert api.used == used + 2
+
+    # «⏩ Загрузить отложенные»: бюджет не применяется
+    asyncio.run(engine.load_matches(max_age_minutes=0, force=True))
+    assert NHL.name_ru in engine.last_report.paid and not engine.last_report.budget_skipped

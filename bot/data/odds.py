@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 import httpx
+from zoneinfo import ZoneInfo
 
 from ..config import LEAGUES, League, settings
 from ..sports import SPORTS
@@ -257,9 +258,14 @@ class OddsClient:
         report = ScanReport(allowance=allowance, fetched_at=datetime.now(timezone.utc).isoformat())
         events: list[Event] = []
         now = datetime.now(timezone.utc)
+        tz = ZoneInfo(settings.timezone)
         async with httpx.AsyncClient(timeout=30) as client:
             for league in LEAGUES:
                 saved = store.get(f"odds_raw:{league.odds_key}") if store is not None else None
+                # первая загрузка лиги за день разрешена всегда (кроме неприкосновенного запаса);
+                # дневной бюджет ограничивает только повторные обновления той же лиги
+                fetched_today = bool(saved) and (
+                    datetime.fromisoformat(saved["at"]).astimezone(tz).date() == now.astimezone(tz).date())
                 if saved and max_age_minutes is not None:
                     age = now - datetime.fromisoformat(saved["at"])
                     if age <= timedelta(minutes=max_age_minutes):
@@ -284,7 +290,12 @@ class OddsClient:
                 if remaining is not None and cost > remaining:
                     report.budget_skipped.append(league.name_ru)
                     continue
-                if allowance is not None and report.spent > 0 and report.spent + cost > allowance:
+                first_today = store is not None and not fetched_today
+                if first_today:
+                    if remaining is not None and remaining - cost < settings.odds_reserve:
+                        report.budget_skipped.append(league.name_ru)
+                        continue
+                elif allowance is not None and report.spent > 0 and report.spent + cost > allowance:
                     report.budget_skipped.append(league.name_ru)
                     continue
                 try:
