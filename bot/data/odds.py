@@ -138,6 +138,7 @@ class ScanReport:
     budget_skipped: list[str] = field(default_factory=list)  # отложены, чтобы уложиться в дневной бюджет
     failed: list[str] = field(default_factory=list)
     gated: list[str] = field(default_factory=list)  # матчи есть, но разбирать нечего — линии не загружались
+    reused: list[str] = field(default_factory=list)  # взяты из сохранённых (на диске) — кредиты не тратились
     allowance: float | None = None  # сколько разрешено потратить на этот скан
     cached: bool = False  # линии взяты из кеша, кредиты не тратились
     fetched_at: str = ""  # когда линии были получены (UTC ISO)
@@ -237,23 +238,34 @@ class OddsClient:
         if cost is None:
             after = self.quota.used if self.quota else None
             cost = (after - before) if (before is not None and after is not None) else market_cost(markets)
-        return [parse_event(raw, league) for raw in resp.json()], max(cost, 0)
+        self.last_raw = resp.json()
+        return [parse_event(raw, league) for raw in self.last_raw], max(cost, 0)
 
     async def upcoming(self, hours: int | None = None, allowance: float | None = None,
-                       gate=None) -> tuple[list[Event], ScanReport]:
+                       gate=None, store=None, max_age_minutes: int | None = None) -> tuple[list[Event], ScanReport]:
         """Линии по лигам в порядке приоритета (порядок ENABLED_LEAGUES).
 
         1. Бесплатно проверяем, есть ли у лиги матчи в окне; пустые лиги пропускаем.
         2. gate(лига, матчи) — бесплатный фильтр: False — разбирать нечего, линии не нужны
            (НБА «по анализу» без перекоса графика).
-        3. Платим только за лиги с матчами, пока укладываемся в бюджет скана (allowance).
+        3. store (база бота) — линии каждой лиги сохраняются на диск: если они моложе max_age_minutes,
+           берём сохранённые бесплатно (в том числе после перезапуска бота).
+        4. Платим только за лиги с матчами, пока укладываемся в бюджет скана (allowance).
            Первую лигу с матчами берём всегда, если на неё хватает остатка.
         """
         hours = hours or settings.lookahead_hours
         report = ScanReport(allowance=allowance, fetched_at=datetime.now(timezone.utc).isoformat())
         events: list[Event] = []
+        now = datetime.now(timezone.utc)
         async with httpx.AsyncClient(timeout=30) as client:
             for league in LEAGUES:
+                saved = store.get(f"odds_raw:{league.odds_key}") if store is not None else None
+                if saved and max_age_minutes is not None:
+                    age = now - datetime.fromisoformat(saved["at"])
+                    if age <= timedelta(minutes=max_age_minutes):
+                        events.extend(parse_event(raw, league) for raw in saved["data"])
+                        report.reused.append(league.name_ru)
+                        continue
                 free = await self.free_events(client, league, hours)
                 if free == []:
                     report.empty.append(league.name_ru)
@@ -278,6 +290,8 @@ class OddsClient:
                 try:
                     got, spent = await self.fetch_league(client, league, hours)
                     events.extend(got)
+                    if store is not None:
+                        store.set(f"odds_raw:{league.odds_key}", {"at": now.isoformat(), "data": self.last_raw})
                     report.spent += spent
                     report.paid.append(league.name_ru)
                 except httpx.HTTPStatusError as exc:

@@ -152,7 +152,7 @@ def test_nba_dossier_verdict_and_settlement():
     season = [Result(r.match_id, r.competition, r.utc_date, r.home.replace("Los Angeles", "LA"),
                      r.away.replace("Los Angeles", "LA"), *r.final, *r.final) for r in season]
 
-    async def upcoming(max_age_minutes=None):
+    async def upcoming(max_age_minutes=None, force=False):
         return [parse_event(_raw(kickoff), NBA)]
 
     async def results():

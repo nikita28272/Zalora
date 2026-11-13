@@ -349,7 +349,6 @@ class Engine:
         self.nba = NbaClient()
         self.matches: list[MatchContext] = []
         self._events: tuple[float, list[Event]] = (0.0, [])
-        self._events_at: datetime | None = None  # когда линии загружены (для ежедневного списка)
         self.last_report: ScanReport | None = None
         self._headlines: tuple[float, list[news.Headline]] = (0.0, [])
         self._lock = asyncio.Lock()
@@ -395,17 +394,22 @@ class Engine:
         model = NbaModel(results, season_start=season_start)
         return model, standings_from_results(model.current_season())
 
-    async def _upcoming(self, max_age_minutes: int | None = None) -> list[Event]:
-        """Линии с кешем: повторные /matches и досье не тратят кредиты The Odds API."""
+    async def _upcoming(self, max_age_minutes: int | None = None, force: bool = False) -> list[Event]:
+        """Линии с кешем: повторные /matches и досье не тратят кредиты The Odds API.
+        force — владелец сам попросил загрузить отложенные лиги: дневной бюджет не применяем
+        (сохранённые линии других лиг всё равно берутся бесплатно)."""
         max_age = settings.odds_cache_minutes if max_age_minutes is None else max_age_minutes
         ts, cached = self._events
-        if ts and time.monotonic() - ts < max_age * 60:
+        if not force and ts and time.monotonic() - ts < max_age * 60:
             if self.last_report:
                 self.last_report.cached = True
             return cached
-        fresh, report = await self.odds.upcoming(allowance=self.scan_allowance(), gate=self._odds_gate)
+        fresh, report = await self.odds.upcoming(allowance=None if force else self.scan_allowance(),
+                                                 gate=self._odds_gate,
+                                                 store=self.db, max_age_minutes=max_age)
         self._events = (time.monotonic(), fresh)
-        self._events_at = datetime.now(timezone.utc)
+        if report.spent > 0 or self.db.get("odds_fetched_at") is None:
+            self.db.set("odds_fetched_at", datetime.now(timezone.utc).isoformat())
         self.last_report = report
         self._save_quota()
         today = local(datetime.now(timezone.utc)).date().isoformat()
@@ -442,10 +446,10 @@ class Engine:
         Если сегодня линии уже загружались (не раньше DAILY_REUSE_HOURS назад), берём их из кеша:
         повторная загрузка в SCAN_TIME потратила бы кредиты на почти те же данные."""
         now = now or datetime.now(timezone.utc)
-        at = self._events_at
+        raw = self.db.get("odds_fetched_at")  # в базе: переживает перезапуск бота
+        at = datetime.fromisoformat(raw) if raw else None
         hours = settings.daily_reuse_hours
-        if (hours > 0 and at is not None and self._events[0]
-                and local(at).date() == local(now).date() and now - at <= timedelta(hours=hours)):
+        if hours > 0 and at is not None and local(at).date() == local(now).date() and now - at <= timedelta(hours=hours):
             return hours * 60
         return settings.odds_scan_max_age_minutes
 
@@ -482,8 +486,8 @@ class Engine:
         self._save_quota()
         return self.quota()
 
-    async def load_matches(self, max_age_minutes: int | None = None) -> list[MatchContext]:
-        events = [e for e in await self._upcoming(max_age_minutes) if is_prematch(e.kickoff)]
+    async def load_matches(self, max_age_minutes: int | None = None, force: bool = False) -> list[MatchContext]:
+        events = [e for e in await self._upcoming(max_age_minutes, force) if is_prematch(e.kickoff)]
         leagues = {e.league.fd_code: e.league for e in events}
         league_data = {code: await self._league_data(lg) for code, lg in sorted(leagues.items())}
 

@@ -224,6 +224,22 @@ def _quick_row(top=None, nba=None) -> list[InlineKeyboardButton]:
     return row[:8]
 
 
+def force_row(report) -> list[InlineKeyboardButton]:
+    """Кнопка «загрузить отложенные лиги», если бот отложил их ради дневного бюджета."""
+    if report is None or report.cached or not report.budget_skipped:
+        return []
+    return [InlineKeyboardButton(text="⏩ Загрузить отложенные: " + ", ".join(report.budget_skipped)[:40],
+                                 callback_data="odds:force")]
+
+
+def with_force(markup: InlineKeyboardMarkup | None, report) -> InlineKeyboardMarkup | None:
+    row = force_row(report)
+    if not row:
+        return markup
+    rows = list(markup.inline_keyboard) if markup else []
+    return InlineKeyboardMarkup(inline_keyboard=rows + [row])
+
+
 def analyze_button(top=None, nba=None) -> InlineKeyboardMarkup:
     """Под утренним списком: «🔍 Анализ» и сразу досье отобранных матчей одним нажатием."""
     rows = [[InlineKeyboardButton(text="🔍 Анализ", callback_data="menu:analyze")]]
@@ -336,7 +352,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await send_long(message.bot, message.chat.id,
                         fmt.matches_list(matches) + "\n" + (hint if matches else "") + "\n\n"
                         + fmt.odds_footer(engine.last_report, engine.quota()),
-                        matches_keyboard(matches))
+                        with_force(matches_keyboard(matches), engine.last_report))
 
     async def pick_match(message: Message, idx: int) -> None:
         """Досье матча (режим «босс в чате») или полный разбор агентами (режим api)."""
@@ -720,6 +736,22 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await cb.answer("Записал")
         await cb.message.answer(fmt.placed_confirmation(db.signal(sid), db.bankroll(), db.in_play()))
 
+    @owner.callback_query(F.data == "odds:force")
+    async def on_force(cb: CallbackQuery) -> None:
+        await cb.answer("Загружаю отложенные лиги…")
+        try:
+            matches = await engine.load_matches(force=True)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("forced load failed")
+            await cb.message.answer(f"Не удалось загрузить: {type(exc).__name__}")
+            return
+        top, nba = engine.top_for_analysis(), engine.nba_top()
+        has_nba = any(m.sport.key == "basketball" for m in matches)
+        await send_long(cb.message.bot, cb.message.chat.id,
+                        fmt.top_block(top, nba if has_nba else None) + "\n\n" + fmt.matches_list(matches)
+                        + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()),
+                        matches_keyboard(matches, top, nba))
+
     @owner.callback_query(F.data == "bank:edit")
     async def on_bank_edit(cb: CallbackQuery) -> None:
         db.set("awaiting_bet", None)
@@ -891,7 +923,7 @@ async def run_morning_matches(bot: Bot, engine: Engine, chat_id: int) -> None:
     text = (f"☀️ <b>Матчи на {settings.lookahead_hours} часов</b>\n\n" + fmt.top_block(top, nba if has_nba else None)
             + "\n\n"
             + fmt.matches_list(matches) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
-    await send_long(bot, chat_id, text, analyze_button(top, nba) if matches else None)
+    await send_long(bot, chat_id, text, with_force(analyze_button(top, nba) if matches else None, engine.last_report))
 
 
 async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:

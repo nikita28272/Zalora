@@ -123,10 +123,9 @@ def test_daily_list_reuses_lines_loaded_today():
     tz = ZoneInfo(settings.timezone)  # 16:00 по местному времени, как в расписании
     now = datetime.now(tz).replace(hour=16, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     assert engine.daily_max_age(now) == settings.odds_scan_max_age_minutes  # ничего не загружали
-    engine._events = (1.0, [])
-    engine._events_at = now - timedelta(hours=3)
+    engine.db.set("odds_fetched_at", (now - timedelta(hours=3)).isoformat())
     assert engine.daily_max_age(now) == settings.daily_reuse_hours * 60  # загружали днём — из кеша
-    engine._events_at = now - timedelta(hours=settings.daily_reuse_hours + 1)
+    engine.db.set("odds_fetched_at", (now - timedelta(hours=settings.daily_reuse_hours + 1)).isoformat())
     assert engine.daily_max_age(now) == settings.odds_scan_max_age_minutes  # слишком давно
 
 
@@ -176,3 +175,46 @@ def test_upcoming_respects_gate(api):
 
     events, report = asyncio.run(client.upcoming(gate=gate))
     assert "НХЛ" in report.gated and all(sport != NHL.odds_key for sport, _ in api.paid_calls)
+
+
+
+def test_saved_lines_survive_restart_and_free_budget_for_next_league(api):
+    db = DB(":memory:")
+    engine = Engine(db)
+
+    async def no_stats(league):
+        return None, []
+
+    engine._league_data = no_stats
+    first = asyncio.run(engine.load_matches())
+    spent_first = api.used
+    assert spent_first == 5
+
+    # «перезапуск бота»: новый движок, та же база — линии берутся с диска, кредиты не тратятся
+    engine2 = Engine(db)
+    engine2._league_data = no_stats
+    matches = asyncio.run(engine2.load_matches())
+    assert api.used == spent_first and len(matches) == len(first)
+    assert set(engine2.last_report.reused) == {PL.name_ru, NHL.name_ru}
+    assert "из сохранённых бесплатно" in fmt.scan_report_line(engine2.last_report)
+
+
+def test_force_loads_budget_skipped_leagues(api):
+    from bot.tg.handlers import force_row
+
+    db = DB(":memory:")
+    engine = Engine(db)
+
+    async def no_stats(league):
+        return None, []
+
+    engine._league_data = no_stats
+    engine.scan_allowance = lambda: 0  # дневной бюджет исчерпан
+    asyncio.run(engine.load_matches())
+    assert engine.last_report.budget_skipped == [NHL.name_ru]  # первая лига взята, вторая отложена
+    assert force_row(engine.last_report)[0].callback_data == "odds:force"
+    used = api.used
+    asyncio.run(engine.load_matches(force=True))
+    assert engine.last_report.reused == [PL.name_ru]  # уже загруженная лига — бесплатно с диска
+    assert engine.last_report.paid == [NHL.name_ru] and api.used == used + 3
+    assert force_row(engine.last_report) == []

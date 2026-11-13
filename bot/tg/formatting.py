@@ -539,6 +539,8 @@ def scan_report_line(r: ScanReport | None) -> str:
     if r.cached:
         return f"♻️ Линии из кеша (обновлены в {when}), кредиты не тратились."
     parts = [f"🧾 Линии обновлены: потрачено <b>{r.spent}</b> кредит(ов) на {len(r.paid)} лиг(и)"]
+    if r.reused:
+        parts.append("из сохранённых бесплатно: " + escape(", ".join(r.reused)))
     if r.empty:
         parts.append(f"без матчей, пропущено бесплатно: {len(r.empty)}")
     text = "; ".join(parts) + "."
