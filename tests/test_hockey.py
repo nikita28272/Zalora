@@ -155,7 +155,7 @@ def test_hockey_manual_flow_to_settlement():
     assert f"/verdict {num} <исход1>" in text
 
     n, picks, conf = parse_verdict(f"{num} ф1 0.42 тб 0.5 medium")
-    top = engine.manual_top(n, picks, conf)
+    top = engine.manual_top(n, picks, conf, hot={"hcp_home"})  # кэф 2.70 вне 1.70–2.50: 🔥 только вручную
     assert [p.selection for p in top.picks] == ["hcp_home", "over"]
     msg = fmt.top_picks(top, db.bankroll())
     assert "Ф1(-1.5)" in msg and "Топ-2" in msg

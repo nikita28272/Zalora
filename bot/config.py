@@ -150,8 +150,8 @@ class Settings:
     top_matches: int = field(default_factory=lambda: _int("TOP_MATCHES", 5))
     top_min_edge: float = field(default_factory=lambda: _float("TOP_MIN_EDGE", -0.01))
     max_prob_deviation: float = field(default_factory=lambda: _float("MAX_PROB_DEVIATION", 0.08))
-    min_odds: float = field(default_factory=lambda: _float("MIN_ODDS", 1.40))
-    max_odds: float = field(default_factory=lambda: _float("MAX_ODDS", 4.50))
+    min_odds: float = field(default_factory=lambda: _float("MIN_ODDS", 1.70))
+    max_odds: float = field(default_factory=lambda: _float("MAX_ODDS", 2.50))
     lookahead_hours: int = field(default_factory=lambda: _int("LOOKAHEAD_HOURS", 48))
     # --- экономия кредитов The Odds API ---
     # /matches и досье берут линии из кеша, если им не больше N минут

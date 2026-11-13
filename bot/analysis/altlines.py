@@ -1,7 +1,8 @@
-"""Исходы с высокой вероятностью (60–70%) и кэфом ~1.5–1.8: запасные линии и двойной шанс.
+"""Самые вероятные исходы в рабочем диапазоне кэфов (MIN_ODDS–MAX_ODDS, по умолчанию 1.70–2.50).
 
-Основные линии букмекеров ставятся так, чтобы обе стороны были около 50%. Чтобы найти исходы
-с шансом 60–70%, сдвигаем линию с запасом:
+Владелец берёт кэф 1.70–2.50 и внутри этого диапазона — исходы с самым высоким шансом захода.
+Основные линии букмекеров ставятся так, чтобы обе стороны были около 50% (кэф ~1.9). Кэф 1.70 —
+это шанс ~55–56%, поэтому дополнительно сдвигаем линию с небольшим запасом:
   * НБА — фора и тотал: по честной вероятности основной линии восстанавливаем ожидаемую разницу
     и сумму очков (нормальное распределение) и подбираем линию под нужный шанс;
   * футбол — двойной шанс 1X / X2 = сумма вероятностей исходов;
@@ -18,12 +19,13 @@ from statistics import NormalDist
 
 from ..sports import sel_short
 
-# Цель владельца — заход 60–70% при кэфе ~1.6. С маржой конторы шанс 61% даёт кэф ≈1.56,
-# 65% — уже ≈1.46, 70% — ≈1.36: поэтому целимся в нижнюю часть диапазона.
-TARGET = 0.61
-SAFE_RANGE = (0.57, 0.72)
-ODDS_RANGE = (1.35, 1.85)
+from ..config import settings
+
 MARGIN = 0.05  # типичная маржа конторы на такие линии
+# Рабочий диапазон кэфов владельца; внутри него — самые вероятные исходы.
+ODDS_RANGE = (settings.min_odds, settings.max_odds)
+# Запасная линия подбирается под кэф чуть выше нижней границы: 1.72 ≈ шанс 55%.
+TARGET = 1 / ((ODDS_RANGE[0] + 0.02) * (1 + MARGIN))
 SD_MARGIN = 12.5  # разброс разницы очков НБА
 SD_TOTAL = 18.0  # разброс суммы очков НБА
 _N = NormalDist()
@@ -106,8 +108,21 @@ def alt_market(ctx, selection: str, line: float | None) -> tuple[float, float] |
     return None
 
 
+def _fit(ctx, sel: str, ideal: float) -> SafeOption | None:
+    """Половинчатая линия рядом с идеальной: самый высокий шанс при оценочном кэфе в диапазоне."""
+    best = None
+    for line in (_half(ideal) - 1, _half(ideal), _half(ideal) + 1):
+        got = alt_market(ctx, sel, line)
+        if got and ODDS_RANGE[0] <= got[1] <= ODDS_RANGE[1] and (best is None or got[0] > best[1]):
+            best = (line, got[0], got[1])
+    if best is None:
+        return None
+    line, p, o = best
+    return SafeOption(sel, line, p, o, True, sel_short(ctx.sport, sel, line))
+
+
 def safe_options(ctx) -> list[SafeOption]:
-    """Варианты с шансом ~60–70% для досье (лучшие по близости к 65%)."""
+    """Исходы с кэфом в рабочем диапазоне для досье — самые вероятные первыми."""
     out: list[SafeOption] = []
     sport, fair, odds = ctx.sport, ctx.market.fair, ctx.market.avg_odds
     # 1. исходы основной линии, у которых шанс уже высокий, а кэф не слишком низкий
@@ -115,27 +130,27 @@ def safe_options(ctx) -> list[SafeOption]:
         o = odds.get(sel)
         if sel in ctx.market.estimated or o is None:
             continue
-        if SAFE_RANGE[0] <= p <= SAFE_RANGE[1] and ODDS_RANGE[0] <= o <= ODDS_RANGE[1]:
+        if ODDS_RANGE[0] <= o <= ODDS_RANGE[1]:
             out.append(SafeOption(sel, ctx.line(sel), p, o, False, ctx.short(sel)))
     # 2. футбол — двойной шанс
     if sport.key == "football":
         for sel in ("dc_home", "dc_away"):
             got = alt_market(ctx, sel, None)
-            if got and SAFE_RANGE[0] <= got[0] <= SAFE_RANGE[1]:
+            if got and ODDS_RANGE[0] <= got[1] <= ODDS_RANGE[1]:
                 out.append(SafeOption(sel, None, got[0], got[1], True, sel_short(sport, sel)))
     # 3. НБА — фора и тотал с запасом под шанс ~65%
     if sport.key == "basketball":
         m, t = _nba_margin_mean(ctx), _nba_total_mean(ctx)
         z = _N.inv_cdf(TARGET)
         if m is not None:
-            for sel, line in (("hcp_home", _half(SD_MARGIN * z - m)), ("hcp_away", _half(SD_MARGIN * z + m))):
-                p, o = alt_market(ctx, sel, line)
-                out.append(SafeOption(sel, line, p, o, True, sel_short(sport, sel, line)))
+            for sel, ideal in (("hcp_home", SD_MARGIN * z - m), ("hcp_away", SD_MARGIN * z + m)):
+                if (opt := _fit(ctx, sel, ideal)):
+                    out.append(opt)
         if t is not None:
-            for sel, line in (("under", _half(t + SD_TOTAL * z)), ("over", _half(t - SD_TOTAL * z))):
-                p, o = alt_market(ctx, sel, line)
-                out.append(SafeOption(sel, line, p, o, True, sel_short(sport, sel, line)))
-    out.sort(key=lambda x: abs(x.p - TARGET))
+            for sel, ideal in (("under", t + SD_TOTAL * z), ("over", t - SD_TOTAL * z)):
+                if (opt := _fit(ctx, sel, ideal)):
+                    out.append(opt)
+    out.sort(key=lambda x: -x.p)
     return out
 
 
@@ -143,7 +158,7 @@ def safe_text(ctx) -> str:
     opts = safe_options(ctx)
     if not opts:
         return ""
-    lines = ["ВАРИАНТЫ С ВЫСОКОЙ ВЕРОЯТНОСТЬЮ (цель: заход 60–70% при кэфе ~1.5–1.8; "
+    lines = [f"САМЫЕ ВЕРОЯТНЫЕ ИСХОДЫ С КЭФОМ {ODDS_RANGE[0]:.2f}–{ODDS_RANGE[1]:.2f} (сверху — выше шанс; "
              "* — линия с запасом, кэф оценочный, сверить в конторе):"]
     for o in opts[:6]:
         lines.append(f"  {o.code} = {o.label}: вероятность {o.p:.1%}, кэф {'≈' if o.estimated else ''}{o.odds:.2f}"

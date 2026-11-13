@@ -359,9 +359,11 @@ def test_safe_lines_nba_and_alt_verdict():
     ctx = _nba_ctx("safe", NOW + timedelta(days=1), None)  # Ф1(-5.5) ~50%, тотал 225.5 ~50%
     opts = {o.selection: o for o in safe_options(ctx) if o.estimated}
     assert set(opts) >= {"hcp_home", "hcp_away", "over", "under"}
-    assert any(o.selection == "ml_home" and not o.estimated for o in safe_options(ctx))  # П1 фаворита 1.54
+    assert not any(o.selection == "ml_home" for o in safe_options(ctx))  # П1 фаворита 1.54 — ниже 1.70
     for o in opts.values():
-        assert 0.57 <= o.p <= 0.68 and 1.4 <= o.odds <= 1.7 and o.estimated
+        assert 0.52 <= o.p <= 0.58 and 1.7 <= o.odds <= 1.8 and o.estimated
+    ps = [o.p for o in safe_options(ctx)]
+    assert ps == sorted(ps, reverse=True)  # самые вероятные первыми
     assert opts["hcp_home"].line > -5.5 and opts["under"].line > 225.5  # запас в сторону ставки
     p, odds = alt_market(ctx, "hcp_home", 10.5)
     assert p > 0.75  # +10.5 при ожидаемой победе хозяев — почти наверняка
@@ -382,11 +384,11 @@ def test_safe_lines_nba_and_alt_verdict():
     db.conn.execute("UPDATE signals SET kickoff = ?", ((NOW - timedelta(hours=4)).isoformat(),))
 
     async def finished(date_from, date_to):
-        return [Result(77, "NBA", NOW - timedelta(hours=4), HOME, "LA Clippers", 113, 110, 113, 110)]
+        return [Result(77, "NBA", NOW - timedelta(hours=4), HOME, "LA Clippers", 108, 100, 108, 100)]
 
     engine.nba.finished_between = finished
     settled = {s.selection: s for s in asyncio.run(engine.settle())}
-    # хозяева выиграли 3 очка: фора с запасом (меньше основной −5.5) — зашло; «меньше» 223 при линии > 225.5 — зашло
+    # хозяева выиграли 8 очков: фора с запасом (меньше основной −5.5) — зашло; «меньше» 208 при линии > 225.5 — зашло
     assert settled["hcp_home"].status == "won" and settled["under"].status == "won"
 
 
