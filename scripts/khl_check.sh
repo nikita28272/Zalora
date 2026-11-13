@@ -4,4 +4,4 @@
 # Запуск из папки проекта:  bash scripts/khl_check.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-docker compose run --rm bot python -m bot.khl_check
+docker compose build -q bot && docker compose run --rm bot python -m bot.khl_check

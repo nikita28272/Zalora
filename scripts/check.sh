@@ -3,4 +3,4 @@
 # Запуск из папки проекта:  bash scripts/check.sh
 set -euo pipefail
 cd "$(dirname "$0")/.."
-docker compose run --rm bot python -m bot.check
+docker compose build -q bot && docker compose run --rm bot python -m bot.check

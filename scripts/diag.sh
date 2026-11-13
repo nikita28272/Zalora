@@ -3,4 +3,4 @@
 # Пример:  bash scripts/diag.sh NHL "Vegas" "Nashville"
 set -euo pipefail
 cd "$(dirname "$0")/.."
-docker compose run --rm bot python -m bot.diag "$@"
+docker compose build -q bot && docker compose run --rm bot python -m bot.diag "$@"
