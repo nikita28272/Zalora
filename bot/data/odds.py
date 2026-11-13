@@ -69,7 +69,7 @@ def _point(o: dict) -> float | None:
 
 
 def parse_event(raw: dict, league: League) -> Event:
-    hockey = league.sport == "hockey"
+    with_ot = league.sport in ("hockey", "basketball")  # h2h — победа с учётом овертайма
     event = Event(
         event_id=raw["id"],
         league=league,
@@ -92,9 +92,9 @@ def parse_event(raw: dict, league: League) -> Event:
                     else None
                 )
                 if key == "h2h":
-                    if hockey and side in ("home", "away"):
-                        book.put("ml_" + side, price)  # в хоккее h2h — победа с учётом ОТ
-                    elif not hockey and side:
+                    if with_ot and side in ("home", "away"):
+                        book.put("ml_" + side, price)  # в хоккее и баскетболе h2h — победа с учётом ОТ
+                    elif not with_ot and side:
                         book.put(side, price)
                 elif key == "h2h_3_way" and side:
                     book.put(side, price)  # исход основного времени

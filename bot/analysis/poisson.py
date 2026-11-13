@@ -44,6 +44,8 @@ class ModelOutput:
     home_games: int
     away_games: int
     draw_boost: float = 1.0  # калибровка доли ничьих (см. PoissonModel._calibrate_draws)
+    sds: tuple[float, float] | None = None  # баскетбол: разброс разницы и суммы очков
+    note: str = ""  # особые обстоятельства (например, back-to-back в НБА)
 
 
 def _weight(when: datetime, now: datetime) -> float:
@@ -259,7 +261,11 @@ def hockey_probs(lam_h: float, lam_a: float, total_line: float = 5.5, hcp_home: 
 
 
 def sport_probs(sport_key: str, lam_h: float, lam_a: float, lines: dict[str, float],
-                draw_boost: float = 1.0) -> dict[str, float]:
+                draw_boost: float = 1.0, sds: tuple[float, float] | None = None) -> dict[str, float]:
+    if sport_key == "basketball":  # lam_* — ожидаемые очки
+        from .basketball import basketball_probs
+
+        return basketball_probs(lam_h, lam_a, lines, sds)
     if sport_key == "hockey":
         return hockey_probs(lam_h, lam_a, lines.get("total", 5.5), lines.get("hcp_home", -1.5), draw_boost)
     return outcome_probs(lam_h, lam_a, lines.get("total", 2.5), draw_boost)

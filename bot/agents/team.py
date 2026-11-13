@@ -27,6 +27,9 @@ def outcomes_rule(sport: Sport = FOOTBALL, lines: dict | None = None) -> str:
     if sport.key == "hockey":
         extra = (" В хоккее ml_* — победа с учётом овертайма и буллитов, home/draw/away — исход основного"
                  " времени, тотал и фора — по итоговому счёту с овертаймом. Обязательно учти стартовых вратарей.")
+    if sport.key == "basketball":
+        extra = (" В баскетболе все исходы — с учётом овертайма. Обязательно учти отчёт о травмах (injury report),"
+                 " отдых звёзд и back-to-back.")
     return (f"Обязательно выскажись по КАЖДОМУ исходу: {items} — по одному элементу в outcomes на каждый.{extra}")
 
 

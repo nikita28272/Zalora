@@ -29,9 +29,12 @@ from .agents.llm import AgentError, AgentRun
 from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
 from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds, round_stake
 from .analysis.market import MarketView, market_view
+from .analysis.basketball import NbaModel
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, League, settings
 from .data import news
+from .data.nba import NbaClient, standings_from_results
+from .data.nba import season_start as nba_season_start
 from .data.nhl import NhlClient
 from .data.nhl import season_start as nhl_season_start
 from .data.odds import Event, OddsClient, Quota, ScanReport
@@ -63,7 +66,7 @@ def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result
         return "won" if fa > fh else "lost"
     if selection in ("over", "under"):
         total = fh + fa
-        ln = line if line is not None else (2.5 if sport_key == "football" else 5.5)
+        ln = line if line is not None else SPORTS[sport_key].default_total
         if total == ln:
             return "void"
         return "won" if (total > ln) == (selection == "over") else "lost"
@@ -93,6 +96,8 @@ def days_until_reset(today, reset_day: int) -> int:
 def score_text(r: Result) -> str:
     fh, fa = r.final
     if r.decided in ("OT", "SO"):
+        if (r.home_goals, r.away_goals) == (fh, fa):  # счёт основного времени неизвестен
+            return f"{fh}:{fa} {'ОТ' if r.decided == 'OT' else 'Б'}"
         return f"{fh}:{fa} {'ОТ' if r.decided == 'OT' else 'Б'} (осн. время {r.home_goals}:{r.away_goals})"
     return f"{fh}:{fa}"
 
@@ -207,6 +212,8 @@ class MatchContext:
         if self.sport.key == "hockey":
             text += ("\nХоккей: «П1/П2 ОТ» — победа с учётом овертайма и буллитов; «осн» — исход основного времени;"
                      " тотал и фора — по итоговому счёту с овертаймом (победа в буллитах = +1 гол).")
+        if self.sport.key == "basketball":
+            text += "\nБаскетбол: П1/П2, фора и тотал очков — с учётом овертайма (ничьих не бывает)."
         return text
 
     def numbers(self) -> str:
@@ -221,11 +228,21 @@ class MatchContext:
                 )
         if self.model:
             mo = self.model
-            lines.append(
-                f"ДОКЛАД СТАТИСТИКА (модель Пуассона, текущий + прошлый сезон): ожидаемые голы {mo.lambda_home:.2f} : "
-                f"{mo.lambda_away:.2f} (матчей в выборке с прошлым сезоном: {mo.home_games} и {mo.away_games};"
-                f" прошлый сезон с весом ×0.7 и затуханием)"
-            )
+            if self.sport.key == "basketball":
+                lines.append(
+                    f"ДОКЛАД СТАТИСТИКА (рейтинги нападения и защиты в очках, текущий + прошлый сезон): ожидаемые "
+                    f"очки {mo.lambda_home:.1f} : {mo.lambda_away:.1f}, разница {mo.lambda_home - mo.lambda_away:+.1f},"
+                    f" сумма {mo.lambda_home + mo.lambda_away:.1f} (матчей в выборке: {mo.home_games} и "
+                    f"{mo.away_games}; прошлый сезон с весом ×0.5)"
+                )
+            else:
+                lines.append(
+                    f"ДОКЛАД СТАТИСТИКА (модель Пуассона, текущий + прошлый сезон): ожидаемые голы {mo.lambda_home:.2f}"
+                    f" : {mo.lambda_away:.2f} (матчей в выборке с прошлым сезоном: {mo.home_games} и {mo.away_games};"
+                    f" прошлый сезон с весом ×0.7 и затуханием)"
+                )
+            if mo.note:
+                lines.append(f"  Особо: {mo.note}")
             for sel in self.sport.outcomes:
                 if sel in mo.probs:
                     lines.append(f"  {self.short(sel)}: {mo.probs[sel]:.1%}")
@@ -238,11 +255,14 @@ class MatchContext:
         ):
             lines.append(f"{name}:")
             if row:
-                unit = "шайб" if self.sport.key == "hockey" else "мячей"
-                lines.append(
-                    f"  место {row.position}, очков {row.points} за {row.played} матчей, разница {unit} {row.goal_diff:+d}"
-                    + (f", {row.form}" if row.form and self.sport.key == "hockey" else "")
-                )
+                if self.sport.key == "basketball":
+                    lines.append(f"  место {row.position} в лиге, {row.form}, разница очков {row.goal_diff:+d}")
+                else:
+                    unit = "шайб" if self.sport.key == "hockey" else "мячей"
+                    lines.append(
+                        f"  место {row.position}, очков {row.points} за {row.played} матчей, разница {unit} "
+                        f"{row.goal_diff:+d}" + (f", {row.form}" if row.form and self.sport.key == "hockey" else "")
+                    )
             if form:
                 lines.append(f"  форма (старые → новые): {form}")
             for r in last:
@@ -320,6 +340,7 @@ class Engine:
         self.odds = OddsClient()
         self.stats = StatsClient()
         self.nhl = NhlClient()
+        self.nba = NbaClient()
         self.matches: list[MatchContext] = []
         self._events: tuple[float, list[Event]] = (0.0, [])
         self.last_report: ScanReport | None = None
@@ -327,7 +348,9 @@ class Engine:
         self._lock = asyncio.Lock()
 
     # ---------- данные ----------
-    async def _league_data(self, league: League) -> tuple[PoissonModel | None, list[StandingRow]]:
+    async def _league_data(self, league: League) -> tuple[PoissonModel | NbaModel | None, list[StandingRow]]:
+        if league.sport == "basketball":
+            return await self._nba_data()
         model = None
         rows: list[StandingRow] = []
         hockey = league.sport == "hockey"
@@ -350,6 +373,20 @@ class Engine:
         except Exception as exc:  # noqa: BLE001
             log.warning("%s: таблица %s недоступна: %s", source, league.fd_code, type(exc).__name__)
         return model, rows
+
+    async def _nba_data(self) -> tuple[NbaModel | None, list[StandingRow]]:
+        """НБА: результаты ESPN -> модель рейтингов и таблица (её считаем сами по результатам)."""
+        try:
+            results = await self.nba.results_with_previous()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("ESPN NBA: результаты недоступны: %s", type(exc).__name__)
+            return None, []
+        if not results:
+            return None, []
+        start = nba_season_start(datetime.now(timezone.utc).date())
+        season_start = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+        model = NbaModel(results, season_start=season_start)
+        return model, standings_from_results(model.current_season())
 
     async def _upcoming(self, max_age_minutes: int | None = None) -> list[Event]:
         """Линии с кешем: повторные /matches и досье не тратят кредиты The Odds API."""
@@ -416,10 +453,14 @@ class Engine:
                 ctx.fd_home = best_match(event.home_team, model.teams.keys())
                 ctx.fd_away = best_match(event.away_team, model.teams.keys())
                 if ctx.fd_home and ctx.fd_away and ctx.fd_home != ctx.fd_away:
-                    ctx.model = model.predict(ctx.fd_home, ctx.fd_away)
+                    if isinstance(model, NbaModel):  # НБА: учитываем back-to-back к дате матча
+                        ctx.model = model.predict(ctx.fd_home, ctx.fd_away, event.kickoff)
+                    else:
+                        ctx.model = model.predict(ctx.fd_home, ctx.fd_away)
                     if ctx.model:  # вероятности под рынки и линии этого вида спорта
                         ctx.model.probs = sport_probs(event.league.sport, ctx.model.lambda_home,
-                                                      ctx.model.lambda_away, mv.lines, ctx.model.draw_boost)
+                                                      ctx.model.lambda_away, mv.lines, ctx.model.draw_boost,
+                                                      ctx.model.sds)
                     ctx.home_form, ctx.away_form = model.form(ctx.fd_home), model.form(ctx.fd_away)
                     ctx.home_last, ctx.away_last = model.last_results(ctx.fd_home), model.last_results(ctx.fd_away)
             if rows:
@@ -674,7 +715,7 @@ class Engine:
                        "lines": m.lines, "estimated": m.estimated},
             "model": None if mo is None else {
                 "lh": mo.lambda_home, "la": mo.lambda_away, "probs": mo.probs,
-                "hg": mo.home_games, "ag": mo.away_games, "db": mo.draw_boost,
+                "hg": mo.home_games, "ag": mo.away_games, "db": mo.draw_boost, "note": mo.note,
             },
             "home_row": row(ctx.home_row), "away_row": row(ctx.away_row),
             "home_form": ctx.home_form, "away_form": ctx.away_form,
@@ -690,7 +731,7 @@ class Engine:
                             mk.get("lines", {}), mk.get("estimated", []))
         mo = snap["model"]
         model = None if mo is None else ModelOutput(mo["lh"], mo["la"], mo["probs"], mo["hg"], mo["ag"],
-                                                    mo.get("db", 1.0))
+                                                    mo.get("db", 1.0), note=mo.get("note", ""))
         row = lambda r: None if r is None else StandingRow(**r)  # noqa: E731
         return MatchContext(
             idx=num, event=event, market=market, model=model,
@@ -740,6 +781,8 @@ class Engine:
             "затем «адвоката дьявола» (сильнейший аргумент против каждого исхода).\n"
             f"2. Каждый докладывает по всем исходам: {codes}.\n"
             + ("   Хоккей: обязательно выясни стартовых вратарей.\n" if ctx.sport.key == "hockey" else "")
+            + ("   Баскетбол: обязательно отчёт о травмах (injury report: out / questionable), отдых звёзд, "
+               "back-to-back.\n" if ctx.sport.key == "basketball" else "")
             +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
@@ -938,8 +981,9 @@ class Engine:
             if o in m.fair:
                 est = " (оценка)" if o in m.estimated else ""
                 lines.append(f"  {o} = {ctx.short(o)}: {m.fair[o]:.1%} / {m.avg_odds[o]:.2f}{est}")
-        lineup = ("стартовые вратари обеих команд" if ctx.sport.key == "hockey"
-                  else "официальные стартовые составы обеих команд")
+        lineup = {"hockey": "стартовые вратари обеих команд",
+                  "basketball": "официальный отчёт о травмах (кто out / questionable) и стартовые пятёрки"}.get(
+            ctx.sport.key, "официальные стартовые составы обеих команд")
         lines += [
             "",
             "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md, раздел «Поздняя проверка»:",
@@ -958,8 +1002,9 @@ class Engine:
         for s in self.db.pending():
             if s.source != "boss" or s.user_decision != "pending":
                 continue
-            lead = (settings.late_check_hockey_minutes if s.sport == "hockey"
-                    else settings.late_check_football_minutes)
+            lead = {"hockey": settings.late_check_hockey_minutes,
+                    "basketball": settings.late_check_basketball_minutes}.get(
+                s.sport, settings.late_check_football_minutes)
             if not now < s.kickoff <= now + timedelta(minutes=lead):
                 continue
             num = self.num_for_event(s.event_id)
@@ -1057,10 +1102,17 @@ class Engine:
                 finished.extend(await self.nhl.finished_between(date_from, date_to))
             except Exception as exc:  # noqa: BLE001
                 log.warning("NHL API: результаты недоступны: %s", type(exc).__name__)
+        if any(s.sport == "basketball" for s in due):
+            try:
+                finished.extend(await self.nba.finished_between(date_from, date_to))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("ESPN NBA: результаты недоступны: %s", type(exc).__name__)
 
+        competition = {"hockey": "NHL", "basketball": "NBA"}
         settled = []
         for s in due:
-            pool = [r for r in finished if (r.competition == "NHL") == (s.sport == "hockey")]
+            want = competition.get(s.sport)
+            pool = [r for r in finished if (r.competition == want if want else r.competition not in ("NHL", "NBA"))]
             same_day = [r for r in pool if abs((r.utc_date - s.kickoff).total_seconds()) < 36 * 3600]
             res = next(
                 (r for r in same_day if best_match(s.home, [r.home]) and best_match(s.away, [r.away])), None

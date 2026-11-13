@@ -35,6 +35,7 @@ _WORD_ALIASES = {
     "leverkusen": "leverkusen",
     "frankfurt": "frankfurt",
     "betis": "betis",
+    "la": "los angeles",  # НБА: «LA Clippers» (ESPN) = «Los Angeles Clippers» (линии)
 }
 
 # Полные алиасы для особых случаев (после нормализации).

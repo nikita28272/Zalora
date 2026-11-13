@@ -15,7 +15,7 @@ class League:
     odds_key: str  # ключ в The Odds API
     fd_code: str  # код лиги (для футбола — код football-data.org)
     name_ru: str
-    sport: str = "football"  # football / hockey
+    sport: str = "football"  # football / hockey / basketball
 
 
 ALL_LEAGUES: tuple[League, ...] = (
@@ -26,6 +26,7 @@ ALL_LEAGUES: tuple[League, ...] = (
     League("soccer_france_ligue_one", "FL1", "Франция. Лига 1"),
     League("soccer_uefa_champs_league", "CL", "Лига чемпионов"),
     League("icehockey_nhl", "NHL", "НХЛ", sport="hockey"),
+    League("basketball_nba", "NBA", "НБА", sport="basketball"),
 )
 
 
@@ -121,6 +122,8 @@ class Settings:
     # Напоминание о поздней проверке: в хоккее вратарей подтверждают за 1–3 часа,
     # в футболе составы объявляют за час до начала
     late_check_hockey_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_HOCKEY_MINUTES", 120))
+    # НБА: официальный отчёт о травмах уточняется до последнего часа, составы — за 30 минут
+    late_check_basketball_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_BASKETBALL_MINUTES", 60))
     late_check_football_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_FOOTBALL_MINUTES", 50))
     # Тихие часы для напоминаний: «0-7» — не присылать с 00:00 до 07:00 по TIMEZONE; пусто (по умолчанию) — присылать всегда
     quiet_hours: str = field(default_factory=lambda: _env("QUIET_HOURS", ""))

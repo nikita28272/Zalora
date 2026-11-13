@@ -6,6 +6,8 @@
           home / draw / away (исход основного времени, 1X2),
           over / under (тотал матча с овертаймом, линия букмекера, обычно 5.5–6.5),
           hcp_home / hcp_away (фора, обычно ±1.5, с овертаймом)
+  баскетбол: ml_home / ml_away (победа с учётом овертайма), hcp_home / hcp_away (фора по очкам),
+          over / under (тотал очков) — всё с овертаймом
 """
 
 from __future__ import annotations
@@ -45,7 +47,17 @@ HOCKEY = Sport(
     default_total=5.5,
 )
 
-SPORTS = {s.key: s for s in (FOOTBALL, HOCKEY)}
+BASKETBALL = Sport(
+    key="basketball",
+    emoji="🏀",
+    name_ru="Баскетбол",
+    outcomes=("ml_home", "ml_away", "hcp_home", "hcp_away", "over", "under"),
+    groups=(("ml_home", "ml_away"), ("hcp_home", "hcp_away"), ("over", "under")),
+    odds_markets="h2h,spreads,totals",
+    default_total=225.5,
+)
+
+SPORTS = {s.key: s for s in (FOOTBALL, HOCKEY, BASKETBALL)}
 
 
 def group_of(sport: Sport, selection: str) -> tuple[str, ...]:
@@ -75,6 +87,8 @@ def line_for(selection: str, lines: dict) -> float | None:
 def sel_short(sport: Sport, selection: str, line: float | None = None) -> str:
     """Короткая подпись: П1, X, ТБ2.5, П1 ОТ, Ф1(-1.5)."""
     hockey = sport.key == "hockey"
+    if sport.key == "basketball" and selection in ("ml_home", "ml_away"):
+        return "П1" if selection == "ml_home" else "П2"  # в баскетболе ничьих нет, ОТ всегда включён
     if selection == "home":
         return "П1 осн" if hockey else "П1"
     if selection == "draw":
@@ -100,6 +114,15 @@ def sel_ru(sport: Sport, selection: str, line: float | None = None) -> str:
     """Подробная подпись для сигнала."""
     hockey = sport.key == "hockey"
     total = line if line is not None else sport.default_total
+    if sport.key == "basketball":
+        return {
+            "ml_home": "П1 — победа хозяев (с учётом овертайма)",
+            "ml_away": "П2 — победа гостей (с учётом овертайма)",
+            "over": f"ТБ {total:g} — больше {total:g} очков (с овертаймом)",
+            "under": f"ТМ {total:g} — меньше {total:g} очков (с овертаймом)",
+            "hcp_home": f"Ф1({_fmt_line(line)}) — фора хозяев {_fmt_line(line)} очков (с овертаймом)",
+            "hcp_away": f"Ф2({_fmt_line(line)}) — фора гостей {_fmt_line(line)} очков (с овертаймом)",
+        }.get(selection, selection)
     names = {
         "home": "П1 — победа хозяев в основное время" if hockey else "П1 (победа хозяев)",
         "draw": "X — ничья в основное время" if hockey else "X (ничья)",

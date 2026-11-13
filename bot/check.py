@@ -15,6 +15,7 @@ import httpx
 
 from .config import LEAGUES, settings
 from .data import news
+from .data.nba import NbaClient
 from .data.nhl import NhlClient
 
 OK, FAIL = "✅", "❌"
@@ -88,6 +89,17 @@ async def check_nhl() -> tuple[bool, str]:
     return True, f"команд {len(rows)}, сыграно матчей {len(games)}, из них с ОТ/буллитами {ot}"
 
 
+async def check_nba() -> tuple[bool, str]:
+    if not any(lg.sport == "basketball" for lg in LEAGUES):
+        return True, "НБА выключена (ENABLED_LEAGUES)"
+    games = await NbaClient().season_results()
+    if not games:
+        return False, "матчи сезона не получены (баскетбол пойдёт без модели, только рынок)"
+    teams = {g.home for g in games} | {g.away for g in games}
+    ot = sum(g.decided == "OT" for g in games)
+    return True, f"команд {len(teams)}, сыграно матчей {len(games)}, из них с овертаймом {ot}"
+
+
 async def check_rss() -> tuple[bool, str]:
     heads = await news.fetch_all()
     return (len(heads) > 0), f"заголовков: {len(heads)}"
@@ -106,7 +118,7 @@ async def main() -> int:
             except httpx.RequestError as exc:
                 ok, msg = False, f"нет связи ({type(exc).__name__})"
             results.append((title, ok, msg))
-    for title, coro in (("НХЛ (статистика)", check_nhl()), ("Claude API", check_claude()),
+    for title, coro in (("НХЛ (статистика)", check_nhl()), ("НБА (статистика ESPN)", check_nba()), ("Claude API", check_claude()),
                         ("Новости (RSS)", check_rss())):
         try:
             ok, msg = await coro
