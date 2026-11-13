@@ -137,6 +137,7 @@ class ScanReport:
     empty: list[str] = field(default_factory=list)  # лиги без матчей в окне — пропущены бесплатно
     budget_skipped: list[str] = field(default_factory=list)  # отложены, чтобы уложиться в дневной бюджет
     failed: list[str] = field(default_factory=list)
+    gated: list[str] = field(default_factory=list)  # матчи есть, но разбирать нечего — линии не загружались
     allowance: float | None = None  # сколько разрешено потратить на этот скан
     cached: bool = False  # линии взяты из кеша, кредиты не тратились
     fetched_at: str = ""  # когда линии были получены (UTC ISO)
@@ -176,8 +177,13 @@ class OddsClient:
         return {"commenceTimeFrom": _iso(now), "commenceTimeTo": _iso(now + timedelta(hours=hours))}
 
     async def has_events(self, client: httpx.AsyncClient, league: League, hours: int) -> bool | None:
-        """Есть ли матчи лиги в окне. Список событий без коэффициентов кредиты не тратит.
-        None — не удалось узнать (тогда лучше заплатить, чем пропустить матчи)."""
+        """Есть ли матчи лиги в окне. None — не удалось узнать (тогда лучше заплатить, чем пропустить матчи)."""
+        evs = await self.free_events(client, league, hours)
+        return None if evs is None else len(evs) > 0
+
+    async def free_events(self, client: httpx.AsyncClient, league: League, hours: int) -> list[dict] | None:
+        """Матчи лиги в окне без коэффициентов (команды и время) — этот запрос кредиты не тратит.
+        None — не удалось узнать."""
         try:
             resp = await client.get(
                 f"{BASE_URL}/sports/{league.odds_key}/events",
@@ -186,14 +192,15 @@ class OddsClient:
         except httpx.RequestError:
             return None
         if resp.status_code == 404:
-            return False
+            return []
         if resp.status_code != 200:
             return None
         self._remember(resp)
         try:
-            return len(resp.json()) > 0
+            data = resp.json()
         except ValueError:
             return None
+        return data if isinstance(data, list) else None
 
     def markets_for(self, league: League) -> str:
         return self.markets_ok.get(league.odds_key) or SPORTS[league.sport].odds_markets
@@ -232,11 +239,14 @@ class OddsClient:
             cost = (after - before) if (before is not None and after is not None) else market_cost(markets)
         return [parse_event(raw, league) for raw in resp.json()], max(cost, 0)
 
-    async def upcoming(self, hours: int | None = None, allowance: float | None = None) -> tuple[list[Event], ScanReport]:
+    async def upcoming(self, hours: int | None = None, allowance: float | None = None,
+                       gate=None) -> tuple[list[Event], ScanReport]:
         """Линии по лигам в порядке приоритета (порядок ENABLED_LEAGUES).
 
         1. Бесплатно проверяем, есть ли у лиги матчи в окне; пустые лиги пропускаем.
-        2. Платим только за лиги с матчами, пока укладываемся в бюджет скана (allowance).
+        2. gate(лига, матчи) — бесплатный фильтр: False — разбирать нечего, линии не нужны
+           (НБА «по анализу» без перекоса графика).
+        3. Платим только за лиги с матчами, пока укладываемся в бюджет скана (allowance).
            Первую лигу с матчами берём всегда, если на неё хватает остатка.
         """
         hours = hours or settings.lookahead_hours
@@ -244,9 +254,19 @@ class OddsClient:
         events: list[Event] = []
         async with httpx.AsyncClient(timeout=30) as client:
             for league in LEAGUES:
-                if await self.has_events(client, league, hours) is False:
+                free = await self.free_events(client, league, hours)
+                if free == []:
                     report.empty.append(league.name_ru)
                     continue
+                if gate is not None and free:
+                    try:
+                        need = await gate(league, free)
+                    except Exception as exc:  # noqa: BLE001 — фильтр не сработал: лучше заплатить
+                        log.warning("фильтр %s не сработал: %s", league.odds_key, type(exc).__name__)
+                        need = True
+                    if not need:
+                        report.gated.append(league.name_ru)
+                        continue
                 cost = market_cost(self.markets_for(league))
                 remaining = self.quota.remaining if self.quota else None
                 if remaining is not None and cost > remaining:

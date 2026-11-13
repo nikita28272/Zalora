@@ -103,6 +103,9 @@ class Settings:
     # НБА: «analysis» — ставки по анализу (агенты, новости, график), а не по перевесу над линией;
     # «value» — как в остальных лигах
     nba_mode: str = field(default_factory=lambda: _env("NBA_MODE", "analysis").lower())
+    # НБА «по анализу»: сначала бесплатно смотрим расписание и график; линии (3 кредита) грузим,
+    # только если есть матч с перекосом графика
+    nba_odds_gate: bool = field(default_factory=lambda: _env("NBA_ODDS_GATE", "1") not in ("0", "false", "no"))
     nba_top: int = field(default_factory=lambda: _int("NBA_TOP", 3))  # сколько матчей НБА в день предлагать
     nba_min_factor: float = field(default_factory=lambda: _float("NBA_MIN_FACTOR", 2.0))  # порог перекоса графика
     nba_stake_pct: float = field(default_factory=lambda: _float("NBA_STAKE_PCT", 0.01))  # ставка при уверенном разборе

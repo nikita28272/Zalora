@@ -403,7 +403,7 @@ class Engine:
             if self.last_report:
                 self.last_report.cached = True
             return cached
-        fresh, report = await self.odds.upcoming(allowance=self.scan_allowance())
+        fresh, report = await self.odds.upcoming(allowance=self.scan_allowance(), gate=self._odds_gate)
         self._events = (time.monotonic(), fresh)
         self._events_at = datetime.now(timezone.utc)
         self.last_report = report
@@ -411,6 +411,30 @@ class Engine:
         today = local(datetime.now(timezone.utc)).date().isoformat()
         self.db.set(f"odds_spent:{today}", int(self.db.get(f"odds_spent:{today}", 0)) + report.spent)
         return fresh
+
+    async def _odds_gate(self, league: League, free_events: list[dict]) -> bool:
+        """Нужны ли платные линии лиги. НБА «по анализу»: только если хотя бы у одного матча
+        заметный перекос графика (считается бесплатно по результатам ESPN)."""
+        if league.sport != "basketball" or settings.nba_mode != "analysis" or not settings.nba_odds_gate:
+            return True
+        results = await self.nba.results_with_previous()
+        if not results:
+            return True  # статистика недоступна — отбор не посчитать, лучше загрузить линии
+        teams = {r.home for r in results} | {r.away for r in results}
+        # модель ещё может добавить +1 («сильнее та же сторона»), поэтому порог с запасом
+        threshold = settings.nba_min_factor - 1.0
+        for ev in free_events:
+            try:
+                kickoff = datetime.fromisoformat(str(ev["commence_time"]).replace("Z", "+00:00"))
+                home = best_match(ev["home_team"], teams)
+                away = best_match(ev["away_team"], teams)
+            except (KeyError, TypeError, ValueError):
+                return True
+            if not home or not away:
+                return True  # не узнали команду — не рискуем пропустить матч
+            if is_prematch(kickoff) and nba_factors(results, home, away, kickoff).score >= threshold:
+                return True
+        return False
 
     def daily_max_age(self, now: datetime | None = None) -> int:
         """Допустимый возраст линий для ежедневного списка (минуты).

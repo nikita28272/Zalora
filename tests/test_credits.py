@@ -128,3 +128,51 @@ def test_daily_list_reuses_lines_loaded_today():
     assert engine.daily_max_age(now) == settings.daily_reuse_hours * 60  # загружали днём — из кеша
     engine._events_at = now - timedelta(hours=settings.daily_reuse_hours + 1)
     assert engine.daily_max_age(now) == settings.odds_scan_max_age_minutes  # слишком давно
+
+
+# ---------- НБА: линии только при перекосе графика ----------
+def test_nba_odds_gate_skips_league_without_schedule_edge():
+    from bot.data.stats import Result
+
+    engine = Engine(DB(":memory:"))
+    nba = LEAGUES_BY_ODDS_KEY["basketball_nba"]
+    kickoff = datetime.now(timezone.utc) + timedelta(hours=20)
+    ev = [{"id": "x", "commence_time": kickoff.strftime("%Y-%m-%dT%H:%M:%SZ"),
+           "home_team": "Los Angeles Lakers", "away_team": "Los Angeles Clippers"}]
+    # дерби Лос-Анджелеса, обе отдохнули дома: ни перелёта, ни усталости
+    rested = [Result(1, "NBA", kickoff - timedelta(days=3), "Los Angeles Lakers", "Utah Jazz", 110, 100, 110, 100),
+              Result(2, "NBA", kickoff - timedelta(days=3), "LA Clippers", "Miami Heat", 110, 100, 110, 100)]
+
+    async def results_rested():
+        return rested
+
+    engine.nba.results_with_previous = results_rested
+    assert asyncio.run(engine._odds_gate(nba, ev)) is False  # обе отдохнули — нечего разбирать
+    assert asyncio.run(engine._odds_gate(PL, ev)) is True  # другие лиги — как обычно
+
+    tired = rested + [Result(3, "NBA", kickoff - timedelta(days=1), "Miami Heat", "LA Clippers", 115, 99, 115, 99)]
+
+    async def results_tired():
+        return tired
+
+    engine.nba.results_with_previous = results_tired
+    assert asyncio.run(engine._odds_gate(nba, ev)) is True  # гости на back-to-back после Майами
+
+    async def results_none():
+        return []
+
+    engine.nba.results_with_previous = results_none
+    assert asyncio.run(engine._odds_gate(nba, ev)) is True  # статистики нет — не рискуем
+
+    rep = odds_mod.ScanReport(spent=4, paid=["НХЛ"], gated=["НБА"])
+    assert "кредиты целы: НБА" in fmt.scan_report_line(rep)
+
+
+def test_upcoming_respects_gate(api):
+    client = odds_mod.OddsClient("k")
+
+    async def gate(league, free):
+        return league.sport != "hockey"  # НХЛ «нечего разбирать»
+
+    events, report = asyncio.run(client.upcoming(gate=gate))
+    assert "НХЛ" in report.gated and all(sport != NHL.odds_key for sport, _ in api.paid_calls)

@@ -545,6 +545,9 @@ def scan_report_line(r: ScanReport | None) -> str:
     if r.budget_skipped:
         text += ("\n⏸ Отложено, чтобы кредитов хватило до конца месяца: "
                  + escape(", ".join(r.budget_skipped)))
+    if r.gated:
+        text += ("\n🏀 Без матчей для разбора (нет перекоса графика), линии не загружались, кредиты целы: "
+                 + escape(", ".join(r.gated)))
     if r.failed:
         text += "\n⚠️ Не удалось загрузить: " + escape(", ".join(r.failed))
     return text
