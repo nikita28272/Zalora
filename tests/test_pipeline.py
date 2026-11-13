@@ -375,3 +375,34 @@ def test_late_check_text_and_reminder_timing():
     for s in db.boss_picks(ctx.event.event_id):
         db.decide(s.id, placed=False)
     assert engine.due_late_checks(now) == []
+
+
+def test_top_for_analysis_ranks_and_skips_analyzed():
+    from bot.tg.handlers import analyze_button, matches_keyboard
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    now = datetime.now(timezone.utc)
+    a = _ctx(now + timedelta(days=1))
+    b = _ctx(now + timedelta(days=1))
+    b.idx, b.event.event_id = 2, "evt-b"
+    b.model = None  # без модели оценка = рынок: перевеса нет, хуже −1% из-за маржи
+    soon = _ctx(now + timedelta(minutes=30))
+    soon.idx, soon.event.event_id = 3, "evt-soon"
+
+    sel, ev = a.best_chance()
+    assert sel == "home" and ev > 0.03
+    top = engine.top_for_analysis([a, b, soon])
+    assert [m.idx for m, _, _ in top] == [1]  # b без шансов, soon слишком близко к началу
+    text = fmt.top_block(top)
+    assert "Стоит разобрать" in text and "Arsenal" in text and "П1" in text
+    assert "нет матчей" in fmt.top_block([])
+
+    kb = matches_keyboard([a, b], top)
+    assert kb.inline_keyboard[0][0].text == "⭐ 1"
+    assert analyze_button(top).inline_keyboard[1][0].text == "⭐ 1"
+
+    # после вердикта матч из «стоит разобрать» уходит
+    num = engine.save_candidate(a)
+    engine.manual_top(num, [("home", 0.56)], "medium")
+    assert engine.top_for_analysis([a, b]) == []

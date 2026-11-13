@@ -156,6 +156,27 @@ class MatchContext:
             return None
         return self.model.probs[sel] - pm
 
+    def best_chance(self) -> tuple[str, float] | None:
+        """Самый перспективный исход матча для разбора: (исход, перевес по модели+рынку при среднем кэфе).
+
+        Те же фильтры, что у кандидатов (реальный кэф, рабочий диапазон, модель не дальше
+        MAX_MODEL_GAP от рынка), но без порога MIN_EDGE: нужен рейтинг, а не сигнал.
+        """
+        best: tuple[str, float] | None = None
+        for sel, odds in self.market.avg_odds.items():
+            if sel in self.market.estimated or not (settings.min_odds <= odds <= settings.max_odds):
+                continue
+            gap = self.model_gap(sel)
+            if gap is not None and abs(gap) > settings.max_model_gap:
+                continue
+            p = self.p_quant(sel)
+            if p is None:
+                continue
+            ev = edge(p, odds)
+            if best is None or ev > best[1]:
+                best = (sel, ev)
+        return best
+
     def quant_candidates(self) -> list[tuple[str, float]]:
         """Исходы с перевесом не меньше MIN_EDGE по модели+рынку, лучший первым."""
         if self.model is None:
@@ -864,6 +885,25 @@ class Engine:
                 pick_rank=rank,
             )
         return TopPicks(ctx=ctx, num=num, picks=made, replaced=bool(old), confidence=confidence)
+
+    # ---------- отбор матчей для разбора ----------
+    def analyzed_events(self) -> set[str]:
+        """Матчи, по которым уже есть прогноз босса (их второй раз разбирать не нужно)."""
+        return {s.event_id for s in self.db.pending() if s.source == "boss"}
+
+    def top_for_analysis(self, matches: list[MatchContext] | None = None) -> list[tuple[MatchContext, str, float]]:
+        """До TOP_MATCHES матчей, где перевес вероятнее всего: лучший исход по модели+рынку не хуже
+        TOP_MIN_EDGE. Уже разобранные и слишком близкие к началу пропускаем."""
+        done = self.analyzed_events()
+        scored = []
+        for m in (self.matches if matches is None else matches):
+            if m.event.event_id in done or not is_prematch(m.event.kickoff):
+                continue
+            chance = m.best_chance()
+            if chance and chance[1] >= settings.top_min_edge:
+                scored.append((m, chance[0], chance[1]))
+        scored.sort(key=lambda x: x[2], reverse=True)
+        return scored[:settings.top_matches]
 
     # ---------- поздняя проверка ----------
     def num_for_event(self, event_id: str) -> int | None:

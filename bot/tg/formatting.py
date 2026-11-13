@@ -128,6 +128,19 @@ def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def top_block(top: list[tuple[MatchContext, str, float]]) -> str:
+    """Наверху утреннего списка: какие матчи разобрать, чтобы не тратить лимит Claude впустую."""
+    if not top:
+        return ("⭐ <b>Стоит разобрать:</b> сегодня нет матчей, где перевес вероятен.\n"
+                "Можно не тратить разбор — или выбрать матч на свой вкус.")
+    lines = ["⭐ <b>Стоит разобрать</b> (самый перспективный исход, оценка до агентов):"]
+    for m, sel, ev in top:
+        lines.append(f"<b>{m.idx}.</b> {m.sport.emoji} {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)} — "
+                     f"{escape(m.short(sel))} {m.market.avg_odds[sel]:.2f}, {ev:+.1%}")
+    lines.append("<i>Остальные матчи — по цифрам без шансов на перевес; разбирать их — тратить лимит.</i>")
+    return "\n".join(lines)
+
+
 def _list(items: list[str], limit: int = 4) -> str:
     return "\n".join(f"  • {escape(x)}" for x in items[:limit]) or "  —"
 
