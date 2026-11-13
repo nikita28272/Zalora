@@ -144,7 +144,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await message.answer(f"Не удалось загрузить матчи: {type(exc).__name__}")
             return
         await send_long(message.bot, message.chat.id,
-                        fmt.matches_list(matches) + "\n\n" + fmt.quota_line(engine.quota()))
+                        fmt.matches_list(matches) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
 
     @owner.message(Command("analyze"))
     async def cmd_analyze(message: Message, command: CommandObject) -> None:
@@ -421,7 +421,7 @@ async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
         await bot.send_message(chat_id, f"Не удалось подобрать кандидатов: {type(exc).__name__}")
         return
     kb = dossier_keyboard([num for num, _ in items]) if items else None
-    text = fmt.candidates_message(items, len(matches)) + "\n\n" + fmt.quota_line(engine.quota())
+    text = fmt.candidates_message(items, len(matches)) + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota())
     await bot.send_message(chat_id, text, reply_markup=kb)
 
 

@@ -7,7 +7,7 @@ from html import escape
 from ..agents.schemas import OutcomeView
 from ..config import settings
 from ..db import Signal, Summary, summarize
-from ..data.odds import Quota
+from ..data.odds import Quota, ScanReport
 from ..pipeline import AnalysisResult, MatchContext, local
 from ..sports import SPORTS, sel_short
 
@@ -387,3 +387,28 @@ def quota_line(q: Quota | None) -> str:
         text += ("\n⚠️ Кредиты заканчиваются. Новые линии могут перестать приходить до начала следующего месяца. "
                  "Можно отключить часть лиг: <code>bash scripts/set.sh ENABLED_LEAGUES PL,BL1,NHL</code>")
     return text
+
+
+def scan_report_line(r: ScanReport | None) -> str:
+    """Сколько стоило обновление линий."""
+    if r is None:
+        return ""
+    from datetime import datetime
+    when = local(datetime.fromisoformat(r.fetched_at)).strftime("%H:%M") if r.fetched_at else "?"
+    if r.cached:
+        return f"♻️ Линии из кеша (обновлены в {when}), кредиты не тратились."
+    parts = [f"🧾 Линии обновлены: потрачено <b>{r.spent}</b> кредит(ов) на {len(r.paid)} лиг(и)"]
+    if r.empty:
+        parts.append(f"без матчей, пропущено бесплатно: {len(r.empty)}")
+    text = "; ".join(parts) + "."
+    if r.budget_skipped:
+        text += ("\n⏸ Отложено, чтобы кредитов хватило до конца месяца: "
+                 + escape(", ".join(r.budget_skipped)))
+    if r.failed:
+        text += "\n⚠️ Не удалось загрузить: " + escape(", ".join(r.failed))
+    return text
+
+
+def odds_footer(report: ScanReport | None, quota: Quota | None) -> str:
+    line = scan_report_line(report)
+    return (line + "\n" if line else "") + quota_line(quota)

@@ -33,7 +33,7 @@ from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, League, settings
 from .data import news
 from .data.nhl import NhlClient
-from .data.odds import Event, OddsClient, Quota
+from .data.odds import Event, OddsClient, Quota, ScanReport
 from .data.stats import Result, StandingRow, StatsClient
 from .data.teams import best_match
 from .db import DB, Signal
@@ -74,6 +74,19 @@ def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result
             return "void"
         return "won" if margin > 0 else "lost"
     raise ValueError(f"Неизвестный исход {selection}")
+
+
+def days_until_reset(today, reset_day: int) -> int:
+    """Сколько дней (включая сегодня) осталось до обновления месячного лимита кредитов."""
+    from datetime import date
+
+    reset_day = min(max(reset_day, 1), 28)
+    if today.day < reset_day:
+        nxt = date(today.year, today.month, reset_day)
+    else:
+        y, m = (today.year + 1, 1) if today.month == 12 else (today.year, today.month + 1)
+        nxt = date(y, m, reset_day)
+    return max((nxt - today).days, 1)
 
 
 def score_text(r: Result) -> str:
@@ -248,6 +261,7 @@ class Engine:
         self.nhl = NhlClient()
         self.matches: list[MatchContext] = []
         self._events: tuple[float, list[Event]] = (0.0, [])
+        self.last_report: ScanReport | None = None
         self._headlines: tuple[float, list[news.Headline]] = (0.0, [])
         self._lock = asyncio.Lock()
 
@@ -269,15 +283,36 @@ class Engine:
             log.warning("%s: таблица %s недоступна: %s", source, league.fd_code, type(exc).__name__)
         return model, rows
 
-    async def _upcoming(self) -> list[Event]:
-        """Линии с кешем: повторные /matches и /scan не тратят кредиты The Odds API."""
+    async def _upcoming(self, max_age_minutes: int | None = None) -> list[Event]:
+        """Линии с кешем: повторные /matches и досье не тратят кредиты The Odds API."""
+        max_age = settings.odds_cache_minutes if max_age_minutes is None else max_age_minutes
         ts, cached = self._events
-        if cached and time.monotonic() - ts < settings.odds_cache_minutes * 60:
+        if ts and time.monotonic() - ts < max_age * 60:
+            if self.last_report:
+                self.last_report.cached = True
             return cached
-        fresh = await self.odds.upcoming()
+        fresh, report = await self.odds.upcoming(allowance=self.scan_allowance())
         self._events = (time.monotonic(), fresh)
+        self.last_report = report
         self._save_quota()
+        today = local(datetime.now(timezone.utc)).date().isoformat()
+        self.db.set(f"odds_spent:{today}", int(self.db.get(f"odds_spent:{today}", 0)) + report.spent)
         return fresh
+
+    def scan_allowance(self) -> float | None:
+        """Сколько кредитов можно потратить сейчас, чтобы остатка хватило до обновления лимита.
+
+        Дневной бюджет = (остаток + потрачено сегодня − запас) / дней до обновления;
+        разрешено сейчас = дневной бюджет − уже потрачено сегодня.
+        """
+        q = self.quota()
+        if q is None:
+            return None  # остаток неизвестен — не ограничиваем (узнаем после первого запроса)
+        today = local(datetime.now(timezone.utc)).date()
+        spent_today = int(self.db.get(f"odds_spent:{today.isoformat()}", 0))
+        days_left = days_until_reset(today, settings.odds_reset_day)
+        daily = max(q.remaining + spent_today - settings.odds_reserve, 0) / days_left
+        return max(daily - spent_today, 0.0)
 
     # ---------- кредиты The Odds API ----------
     def _save_quota(self) -> None:
@@ -297,8 +332,8 @@ class Engine:
         self._save_quota()
         return self.quota()
 
-    async def load_matches(self) -> list[MatchContext]:
-        events = [e for e in await self._upcoming() if is_prematch(e.kickoff)]
+    async def load_matches(self, max_age_minutes: int | None = None) -> list[MatchContext]:
+        events = [e for e in await self._upcoming(max_age_minutes) if is_prematch(e.kickoff)]
         leagues = {e.league.fd_code: e.league for e in events}
         league_data = {code: await self._league_data(lg) for code, lg in sorted(leagues.items())}
 
@@ -517,7 +552,7 @@ class Engine:
     # ---------- автоматический скан ----------
     async def scan(self) -> tuple[list[MatchContext], list[AnalysisResult]]:
         async with self._lock:
-            matches = await self.load_matches()
+            matches = await self.load_matches(max_age_minutes=settings.odds_scan_max_age_minutes)
             budget = min(
                 settings.max_llm_matches_per_scan,
                 settings.max_llm_analyses_per_day - self.db.analyses_today(),
@@ -645,7 +680,7 @@ class Engine:
 
     async def candidates(self) -> tuple[list[MatchContext], list[tuple[int, MatchContext]]]:
         async with self._lock:
-            matches = await self.load_matches()
+            matches = await self.load_matches(max_age_minutes=settings.odds_scan_max_age_minutes)
             ranked = sorted(
                 (
                     (ctx, cands[0][1])

@@ -128,10 +128,31 @@ def _int_header(resp: httpx.Response, name: str) -> int | None:
         return None
 
 
+@dataclass
+class ScanReport:
+    """Сколько кредитов ушло на обновление линий и что пропущено."""
+
+    spent: int = 0
+    paid: list[str] = field(default_factory=list)  # лиги, за линии которых заплатили
+    empty: list[str] = field(default_factory=list)  # лиги без матчей в окне — пропущены бесплатно
+    budget_skipped: list[str] = field(default_factory=list)  # отложены, чтобы уложиться в дневной бюджет
+    failed: list[str] = field(default_factory=list)
+    allowance: float | None = None  # сколько разрешено потратить на этот скан
+    cached: bool = False  # линии взяты из кеша, кредиты не тратились
+    fetched_at: str = ""  # когда линии были получены (UTC ISO)
+
+
+def market_cost(markets: str) -> int:
+    """Стоимость запроса по одной лиге: число рынков (регион у нас один)."""
+    return len([m for m in markets.split(",") if m.strip()])
+
+
 class OddsClient:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or settings.odds_api_key
         self.quota: Quota | None = None
+        # лига -> набор рынков, который API точно принимает (запоминаем после HTTP 422)
+        self.markets_ok: dict[str, str] = {}
 
     @property
     def requests_remaining(self) -> int | None:
@@ -150,45 +171,103 @@ class OddsClient:
         self._remember(resp)
         return self.quota
 
-    async def _get(self, client: httpx.AsyncClient, league: League, markets: str, hours: int) -> httpx.Response:
+    def _window(self, hours: int) -> dict:
         now = datetime.now(timezone.utc)
+        return {"commenceTimeFrom": _iso(now), "commenceTimeTo": _iso(now + timedelta(hours=hours))}
+
+    async def has_events(self, client: httpx.AsyncClient, league: League, hours: int) -> bool | None:
+        """Есть ли матчи лиги в окне. Список событий без коэффициентов кредиты не тратит.
+        None — не удалось узнать (тогда лучше заплатить, чем пропустить матчи)."""
+        try:
+            resp = await client.get(
+                f"{BASE_URL}/sports/{league.odds_key}/events",
+                params={"apiKey": self.api_key, "dateFormat": "iso", **self._window(hours)},
+            )
+        except httpx.RequestError:
+            return None
+        if resp.status_code == 404:
+            return False
+        if resp.status_code != 200:
+            return None
+        self._remember(resp)
+        try:
+            return len(resp.json()) > 0
+        except ValueError:
+            return None
+
+    def markets_for(self, league: League) -> str:
+        return self.markets_ok.get(league.odds_key) or SPORTS[league.sport].odds_markets
+
+    async def _get(self, client: httpx.AsyncClient, league: League, markets: str, hours: int) -> httpx.Response:
         params = {
             "apiKey": self.api_key,
             "regions": "eu",
             "markets": markets,
             "oddsFormat": "decimal",
             "dateFormat": "iso",
-            "commenceTimeFrom": _iso(now),
-            "commenceTimeTo": _iso(now + timedelta(hours=hours)),
+            **self._window(hours),
         }
         return await client.get(f"{BASE_URL}/sports/{league.odds_key}/odds", params=params)
 
-    async def fetch_league(self, client: httpx.AsyncClient, league: League, hours: int) -> list[Event]:
+    async def fetch_league(self, client: httpx.AsyncClient, league: League, hours: int) -> tuple[list[Event], int]:
+        """Линии лиги и сколько кредитов это стоило."""
         sport = SPORTS[league.sport]
-        resp = await self._get(client, league, sport.odds_markets, hours)
-        if resp.status_code == 422 and sport.odds_markets_fallback:
-            # API не принимает один из рынков (например, 1X2 основного времени) — берём без него
-            log.info("Odds API: %s без части рынков (HTTP 422), повторяю с %s",
+        markets = self.markets_for(league)
+        resp = await self._get(client, league, markets, hours)
+        if resp.status_code == 422 and sport.odds_markets_fallback and markets != sport.odds_markets_fallback:
+            # API не принимает один из рынков (например, 1X2 основного времени) — запоминаем и берём без него
+            log.info("Odds API: %s не принимает часть рынков (HTTP 422), дальше беру %s",
                      league.odds_key, sport.odds_markets_fallback)
-            resp = await self._get(client, league, sport.odds_markets_fallback, hours)
+            markets = sport.odds_markets_fallback
+            self.markets_ok[league.odds_key] = markets
+            resp = await self._get(client, league, markets, hours)
         if resp.status_code == 404:
-            return []  # лига не в сезоне
+            return [], 0  # лига не в сезоне
         resp.raise_for_status()
+        before = self.quota.used if self.quota else None
         self._remember(resp)
-        return [parse_event(raw, league) for raw in resp.json()]
+        cost = _int_header(resp, "x-requests-last")
+        if cost is None:
+            after = self.quota.used if self.quota else None
+            cost = (after - before) if (before is not None and after is not None) else market_cost(markets)
+        return [parse_event(raw, league) for raw in resp.json()], max(cost, 0)
 
-    async def upcoming(self, hours: int | None = None) -> list[Event]:
+    async def upcoming(self, hours: int | None = None, allowance: float | None = None) -> tuple[list[Event], ScanReport]:
+        """Линии по лигам в порядке приоритета (порядок ENABLED_LEAGUES).
+
+        1. Бесплатно проверяем, есть ли у лиги матчи в окне; пустые лиги пропускаем.
+        2. Платим только за лиги с матчами, пока укладываемся в бюджет скана (allowance).
+           Первую лигу с матчами берём всегда, если на неё хватает остатка.
+        """
         hours = hours or settings.lookahead_hours
+        report = ScanReport(allowance=allowance, fetched_at=datetime.now(timezone.utc).isoformat())
         events: list[Event] = []
         async with httpx.AsyncClient(timeout=30) as client:
             for league in LEAGUES:
+                if await self.has_events(client, league, hours) is False:
+                    report.empty.append(league.name_ru)
+                    continue
+                cost = market_cost(self.markets_for(league))
+                remaining = self.quota.remaining if self.quota else None
+                if remaining is not None and cost > remaining:
+                    report.budget_skipped.append(league.name_ru)
+                    continue
+                if allowance is not None and report.spent > 0 and report.spent + cost > allowance:
+                    report.budget_skipped.append(league.name_ru)
+                    continue
                 try:
-                    events.extend(await self.fetch_league(client, league, hours))
+                    got, spent = await self.fetch_league(client, league, hours)
+                    events.extend(got)
+                    report.spent += spent
+                    report.paid.append(league.name_ru)
                 except httpx.HTTPStatusError as exc:
                     # не логируем URL целиком: в нём ключ API
                     log.warning("Odds API: %s вернул HTTP %s", league.odds_key, exc.response.status_code)
+                    report.failed.append(league.name_ru)
                 except httpx.RequestError as exc:
                     log.warning("Odds API: сетевая ошибка для %s: %s", league.odds_key, type(exc).__name__)
+                    report.failed.append(league.name_ru)
         events.sort(key=lambda e: e.kickoff)
-        log.info("Odds API: %d матчей, осталось кредитов: %s", len(events), self.requests_remaining)
-        return events
+        log.info("Odds API: %d матчей, потрачено %d, осталось %s, без матчей: %d, отложено: %d",
+                 len(events), report.spent, self.requests_remaining, len(report.empty), len(report.budget_skipped))
+        return events, report

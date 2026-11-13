@@ -30,12 +30,14 @@ ALL_LEAGUES: tuple[League, ...] = (
 
 
 def _enabled_leagues() -> tuple[League, ...]:
-    # ENABLED_LEAGUES=PL,PD,SA,BL1,FL1,CL,NHL — какие лиги сканировать (по умолчанию все)
+    # ENABLED_LEAGUES=PL,NHL,BL1 — какие лиги сканировать и в каком порядке приоритета
+    # (при нехватке кредитов первыми пропускаются последние). Пусто — все лиги.
     raw = os.getenv("ENABLED_LEAGUES", "").strip()
     if not raw:
         return ALL_LEAGUES
-    codes = {c.strip().upper() for c in raw.split(",") if c.strip()}
-    return tuple(lg for lg in ALL_LEAGUES if lg.fd_code in codes)
+    by_code = {lg.fd_code: lg for lg in ALL_LEAGUES}
+    codes = [c.strip().upper() for c in raw.split(",") if c.strip()]
+    return tuple(dict.fromkeys(by_code[c] for c in codes if c in by_code))
 
 
 LEAGUES: tuple[League, ...] = _enabled_leagues()
@@ -95,8 +97,15 @@ class Settings:
     min_odds: float = field(default_factory=lambda: _float("MIN_ODDS", 1.40))
     max_odds: float = field(default_factory=lambda: _float("MAX_ODDS", 4.50))
     lookahead_hours: int = field(default_factory=lambda: _int("LOOKAHEAD_HOURS", 48))
-    # линии не перезапрашиваются чаще, чем раз в N минут: бережём бесплатные кредиты The Odds API
-    odds_cache_minutes: int = field(default_factory=lambda: _int("ODDS_CACHE_MINUTES", 30))
+    # --- экономия кредитов The Odds API ---
+    # /matches и досье берут линии из кеша, если им не больше N минут
+    odds_cache_minutes: int = field(default_factory=lambda: _int("ODDS_CACHE_MINUTES", 120))
+    # ежедневный скан обновляет линии, если им больше N минут
+    odds_scan_max_age_minutes: int = field(default_factory=lambda: _int("ODDS_SCAN_MAX_AGE_MINUTES", 60))
+    # день месяца, когда The Odds API обновляет 500 кредитов (смотрите в личном кабинете)
+    odds_reset_day: int = field(default_factory=lambda: _int("ODDS_RESET_DAY", 1))
+    # неприкосновенный запас кредитов на ручные запросы
+    odds_reserve: int = field(default_factory=lambda: _int("ODDS_RESERVE", 20))
     # только прематч: матчи, до начала которых меньше этого времени, не разбираем
     min_minutes_before_kickoff: int = field(default_factory=lambda: _int("MIN_MINUTES_BEFORE_KICKOFF", 60))
 
