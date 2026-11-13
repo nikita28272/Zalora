@@ -422,8 +422,9 @@ def signals_board(pending: list[Signal], now: datetime | None = None) -> str:
         lines += _board_matches(other, now)
     lines += ["",
               "<i>⏳ — до начала, ▶️ — матч идёт или ждёт итога; 🔥 — совет босса, 🔗 — один сценарий.</i>",
-              f"<i>Сыгранные уходят в итоги в {settings.settle_time.replace(',', ' и ')} — "
-              "после этого список обновляется. 🔄 — обновить сейчас.</i>"]
+              f"<i>Когда матч закончится, в {settings.settle_time.replace(',', ' или ')} бот посчитает "
+              "результат: прогноз уйдёт из этого списка в отчёт «Итоги» и в «📊 Статистика». "
+              "🔄 — обновить список.</i>"]
     return "\n".join(lines)
 
 
