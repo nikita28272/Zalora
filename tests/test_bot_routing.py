@@ -149,7 +149,13 @@ def test_dossier_then_top2_verdict_with_buttons_per_pick():
     assert "Топ-2 босса" in reply.text
     rows = reply.reply_markup.inline_keyboard
     assert [[b.text for b in r] for r in rows] == [["✅ Сделал: П1", "❌ Не ставил"],
-                                                  ["✅ Сделал: ТМ2.5", "❌ Не ставил"]]
+                                                  ["✅ Сделал: ТМ2.5", "❌ Не ставил"],
+                                                  ["🥅 Поздняя проверка"]]
+
+    # поздняя проверка: блок для копирования
+    asyncio.run(dp.feed_update(bot, _cb(rows[2][0].callback_data)))
+    check = [m for m in session.sent if isinstance(m, SendMessage)][-2]
+    assert f"ПРОВЕРКА #{num} ДЛЯ БОССА" in check.text and "language-dossier" in check.text
 
     # «✅ Сделал» по первому исходу: кэф и сумма
     asyncio.run(dp.feed_update(bot, _cb(rows[0][0].callback_data)))
@@ -207,3 +213,36 @@ def test_pressed_pick_row_is_removed():
     left = handlers._without(kb, 1)
     assert [b.callback_data for r in left.inline_keyboard for b in r] == ["bet:12:placed", "bet:12:skip"]
     assert handlers._without(left, 12) is None
+    late = InlineKeyboardMarkup(inline_keyboard=kb.inline_keyboard[:1] + [
+        [InlineKeyboardButton(text="🥅", callback_data="late:7")]])
+    assert handlers._without(late, 1) is None  # остальные исходы отмечены — убираем и проверку
+
+
+def test_late_check_reminder_is_sent_once_outside_quiet_hours(monkeypatch):
+    from datetime import timedelta
+
+    bot, dp, session, db, engine, ctx = _setup_with_match()
+    ctx.event.kickoff = datetime.now(timezone.utc) + timedelta(minutes=30)
+    num = engine.save_candidate(ctx)
+    engine.manual_top(num, [("home", 0.56)], "medium")
+    monkeypatch.setattr(handlers, "_quiet_now", lambda now: False)
+    asyncio.run(handlers.run_late_checks(bot, engine, OWNER))
+    asyncio.run(handlers.run_late_checks(bot, engine, OWNER))
+    texts = _texts(session)
+    assert sum("пора поздней проверки" in t for t in texts) == 1
+    assert any(f"ПРОВЕРКА #{num}" in t for t in texts)
+
+
+def test_quiet_hours(monkeypatch):
+    from bot.config import settings as st
+
+    old = st.quiet_hours
+    try:
+        object.__setattr__(st, "quiet_hours", "0-7")
+        assert handlers._quiet_now(datetime(2026, 1, 1, 3, 0)) and not handlers._quiet_now(datetime(2026, 1, 1, 8, 0))
+        object.__setattr__(st, "quiet_hours", "23-7")
+        assert handlers._quiet_now(datetime(2026, 1, 1, 23, 30)) and not handlers._quiet_now(datetime(2026, 1, 1, 12, 0))
+        object.__setattr__(st, "quiet_hours", "")
+        assert not handlers._quiet_now(datetime(2026, 1, 1, 3, 0))
+    finally:
+        object.__setattr__(st, "quiet_hours", old)

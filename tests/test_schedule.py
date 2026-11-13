@@ -17,7 +17,8 @@ def test_jobs_fire_at_local_time():
         sched.start(paused=True)
         now = datetime(2026, 11, 13, 4, 0, tzinfo=timezone.utc)
         out = {}
-        for job in sched.get_jobs():
+        assert {j.id for j in sched.get_jobs()} >= {"daily", "settle", "late"}
+        for job in (j for j in sched.get_jobs() if j.id in ("daily", "settle")):
             nxt = job.trigger.get_next_fire_time(None, now).astimezone(ZoneInfo(settings.timezone))
             out[job.id] = (nxt.hour, nxt.minute)
             assert job.misfire_grace_time == 3600

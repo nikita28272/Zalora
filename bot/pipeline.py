@@ -712,8 +712,9 @@ class Engine:
             self.finance_report(),
             cand,
             "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md репозитория nikita28272/Zalora:\n"
-            "1. Параллельно запусти субагентов «новости» (веб-поиск: травмы, составы, мотивация) "
-            "и «зарубежные аналитики» (веб-поиск: прогнозы экспертов, доля за каждый исход), "
+            "1. Параллельно запусти субагентов «новости» (веб-поиск: травмы, составы, мотивация), "
+            "«зарубежные аналитики» (веб-поиск: прогнозы экспертов, доля за каждый исход) и "
+            "«продвинутая статистика» (xG, качество моментов, вратари, везение), "
             "затем «адвоката дьявола» (сильнейший аргумент против каждого исхода).\n"
             f"2. Каждый докладывает по всем исходам: {codes}.\n"
             + ("   Хоккей: обязательно выясни стартовых вратарей.\n" if ctx.sport.key == "hockey" else "")
@@ -762,8 +763,8 @@ class Engine:
         ctx = self.load_candidate(num)
         if ctx is None:
             raise ValueError(f"Досье #{num} не найдено (или устарело). Запросите новое: «🔍 Анализ».")
-        if not is_prematch(ctx.event.kickoff):
-            raise ValueError("До начала матча меньше часа: работаем только в прематче, прогноз не записываю.")
+        if ctx.event.kickoff - datetime.now(timezone.utc) < timedelta(minutes=settings.verdict_cutoff_minutes):
+            raise ValueError("Матч вот-вот начнётся или уже идёт: работаем только в прематче, прогноз не записываю.")
         if not 1 <= len(picks) <= 2:
             raise ValueError("Нужно один или два исхода.")
         if len({sel for sel, _ in picks}) != len(picks):
@@ -854,6 +855,74 @@ class Engine:
                 pick_rank=rank,
             )
         return TopPicks(ctx=ctx, num=num, picks=made, replaced=bool(old), confidence=confidence)
+
+    # ---------- поздняя проверка ----------
+    def num_for_event(self, event_id: str) -> int | None:
+        return self.db.get(f"cand_event:{event_id}")
+
+    def late_check(self, num: int) -> str:
+        """Короткое задание боссу перед матчем: подтвердить составы/вратарей и оставить или заменить прогноз."""
+        ctx = self.load_candidate(num)
+        if ctx is None:
+            raise ValueError(f"Досье #{num} не найдено (или устарело).")
+        picks = [s for s in self.db.boss_picks(ctx.event.event_id) if s.status == "pending"]
+        if not picks:
+            raise ValueError("По этому матчу нет прогноза босса: сначала досье и /verdict.")
+        m = ctx.market
+        lines = [
+            f"ПРОВЕРКА #{num} ДЛЯ БОССА",
+            f"{ctx.sport.emoji} {ctx.sport.name_ru}. {ctx.event.league.name_ru}: {ctx.event.home_team} (хозяева) — "
+            f"{ctx.event.away_team} (гости)",
+            f"Начало: {local(ctx.event.kickoff):%d.%m.%Y %H:%M} ({settings.timezone}).",
+            "",
+            "ТЕКУЩИЙ ВЕРДИКТ:",
+        ]
+        mark = {"pending": "не отмечен", "placed": "ВЛАДЕЛЕЦ УЖЕ ПОСТАВИЛ", "skipped": "не ставил",
+                "expired": "без отметки"}
+        for s in picks:
+            lines.append(
+                f"  {s.pick_rank or '-'}. {s.selection} = {ctx.short(s.selection)}: босс {s.p_final:.1%}, "
+                f"кэф {s.odds_ref:.2f}, перевес {s.edge:+.1%} ({mark.get(s.user_decision, s.user_decision)})"
+            )
+        lines += ["", "ЛИНИЯ НА МОМЕНТ ДОСЬЕ (вероятность без маржи / средний кэф):"]
+        for o in ctx.sport.outcomes:
+            if o in m.fair:
+                est = " (оценка)" if o in m.estimated else ""
+                lines.append(f"  {o} = {ctx.short(o)}: {m.fair[o]:.1%} / {m.avg_odds[o]:.2f}{est}")
+        lineup = ("стартовые вратари обеих команд" if ctx.sport.key == "hockey"
+                  else "официальные стартовые составы обеих команд")
+        lines += [
+            "",
+            "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md, раздел «Поздняя проверка»:",
+            f"1. Запусти агента «поздняя проверка»: {lineup}, свежие травмы и снятия, "
+            "движение линии с момента досье.",
+            "2. Если что-то меняет оценку — дай новый /verdict (он заменит прежний, если владелец ещё не отметил ставку).",
+            "3. Если ничего не меняется — так и скажи: «оставляем», без команды.",
+            f"Формат: /verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>",
+        ]
+        return "\n".join(lines)
+
+    def due_late_checks(self, now: datetime | None = None) -> list[int]:
+        """Матчи с неотмеченными прогнозами босса, по которым пора делать позднюю проверку (напоминание — один раз)."""
+        now = now or datetime.now(timezone.utc)
+        due: list[int] = []
+        for s in self.db.pending():
+            if s.source != "boss" or s.user_decision != "pending":
+                continue
+            lead = (settings.late_check_hockey_minutes if s.sport == "hockey"
+                    else settings.late_check_football_minutes)
+            if not now < s.kickoff <= now + timedelta(minutes=lead):
+                continue
+            num = self.num_for_event(s.event_id)
+            if num is None or num in due or self.db.get(f"late_sent:{s.event_id}"):
+                continue
+            due.append(num)
+        return due
+
+    def mark_late_sent(self, num: int) -> None:
+        ctx = self.load_candidate(num)
+        if ctx is not None:
+            self.db.set(f"late_sent:{ctx.event.event_id}", True)
 
     # ---------- ваши ставки из досье ----------
     def _dossier_ctx(self, num: int) -> MatchContext:

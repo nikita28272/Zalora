@@ -256,7 +256,7 @@ def test_manual_verdict_rejections():
     top = engine.manual_top(num, [("home", 0.5), ("away", 0.25)])
     assert len(top.picks) == 2
 
-    late = _ctx(datetime.now(timezone.utc) + timedelta(minutes=20))
+    late = _ctx(datetime.now(timezone.utc) + timedelta(minutes=5))
     late.event.event_id = "evt-late"
     num2 = engine.save_candidate(late)
     with pytest.raises(ValueError, match="прематч"):
@@ -344,3 +344,29 @@ def test_morning_report_groups_boss_prediction_and_user_bet():
     assert "💰 Ваша ставка: ТБ2.5" in report
     stats = fmt.stats(db.settled(), db.settled(), db.bankroll())
     assert "Прогнозы босса" in stats
+
+
+def test_late_check_text_and_reminder_timing():
+    db = DB(":memory:")
+    engine = Engine(db)
+    now = datetime.now(timezone.utc)
+    ctx = _ctx(now + timedelta(minutes=40))  # футбол: составы за час, напоминание за 50 минут
+    num = engine.save_candidate(ctx)
+    with pytest.raises(ValueError, match="нет прогноза"):
+        engine.late_check(num)
+    # поздний вердикт за 40 минут до начала принимается (после составов)
+    engine.manual_top(num, [("home", 0.56), ("under", 0.5)], "medium")
+    text = engine.late_check(num)
+    assert text.startswith(f"ПРОВЕРКА #{num} ДЛЯ БОССА") and "стартовые составы" in text
+    assert "1. home = П1" in text and "не отмечен" in text and f"/verdict {num}" in text
+
+    assert engine.due_late_checks(now) == [num]
+    engine.mark_late_sent(num)
+    assert engine.due_late_checks(now) == []  # напоминание — один раз
+    # рано: за 3 часа до матча напоминания нет
+    db.delete(f"late_sent:{ctx.event.event_id}")
+    assert engine.due_late_checks(now - timedelta(hours=3)) == []
+    # все исходы отмечены — проверка не нужна
+    for s in db.boss_picks(ctx.event.event_id):
+        db.decide(s.id, placed=False)
+    assert engine.due_late_checks(now) == []

@@ -112,6 +112,14 @@ class Settings:
     odds_reserve: int = field(default_factory=lambda: _int("ODDS_RESERVE", 20))
     # только прематч: матчи, до начала которых меньше этого времени, не разбираем
     min_minutes_before_kickoff: int = field(default_factory=lambda: _int("MIN_MINUTES_BEFORE_KICKOFF", 60))
+    # Режим «босс в чате»: вердикт принимается до этого срока (поздняя проверка идёт после составов)
+    verdict_cutoff_minutes: int = field(default_factory=lambda: _int("VERDICT_CUTOFF_MINUTES", 10))
+    # Напоминание о поздней проверке: в хоккее вратарей подтверждают за 1–3 часа,
+    # в футболе составы объявляют за час до начала
+    late_check_hockey_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_HOCKEY_MINUTES", 120))
+    late_check_football_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_FOOTBALL_MINUTES", 50))
+    # Ночью напоминания не присылаем: «0-7» — с 00:00 до 07:00 по TIMEZONE; пусто — присылать всегда
+    quiet_hours: str = field(default_factory=lambda: _env("QUIET_HOURS", "0-7"))
 
     # --- банкролл и лимиты (финансист) ---
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))

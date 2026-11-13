@@ -13,17 +13,19 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from .config import settings
 from .db import DB
 from .pipeline import Engine
-from .tg.handlers import build_routers, main_keyboard, run_daily, run_settle
+from .tg.handlers import build_routers, main_keyboard, run_daily, run_late_checks, run_settle
 
 COMMANDS = [
     BotCommand(command="matches", description="Ближайшие матчи"),
     BotCommand(command="analyze", description="Разбор или досье матча: /analyze N"),
     BotCommand(command="scan", description="Кандидаты или сигналы сейчас"),
-    BotCommand(command="verdict", description="Вердикт босса: /verdict 7 home 0.54"),
+    BotCommand(command="verdict", description="Вердикт босса: /verdict 7 home 0.54 under 0.56"),
+    BotCommand(command="check", description="Поздняя проверка перед матчем: /check 7"),
     BotCommand(command="signals", description="Открытые сигналы"),
     BotCommand(command="stats", description="Статистика журнала"),
     BotCommand(command="history", description="Последние рассчитанные"),
@@ -50,12 +52,15 @@ def schedule_jobs(scheduler: AsyncIOScheduler, bot, engine, db) -> None:
                       args=[bot, engine, settings.owner_id], id="daily", **common)
     scheduler.add_job(run_settle, CronTrigger(hour=th, minute=tm, timezone=settings.timezone),
                       args=[bot, engine, db, settings.owner_id], id="settle", **common)
+    if not settings.api_mode:  # напоминания о поздней проверке — только в режиме «босс в чате»
+        scheduler.add_job(run_late_checks, IntervalTrigger(minutes=10), args=[bot, engine, settings.owner_id],
+                          id="late", misfire_grace_time=300, coalesce=True, max_instances=1)
 
 
 def _next_runs_text(scheduler: AsyncIOScheduler) -> str:
     names = {"daily": "матчи дня", "settle": "итоги"}
     parts = []
-    for job in sorted(scheduler.get_jobs(), key=lambda j: j.next_run_time):
+    for job in sorted((j for j in scheduler.get_jobs() if j.id in names), key=lambda j: j.next_run_time):
         when = job.next_run_time.astimezone(ZoneInfo(settings.timezone))
         parts.append(f"{names.get(job.id, job.id)} — {when:%d.%m %H:%M}")
     return "Ближайшие: " + "; ".join(parts) + f" ({settings.timezone})"

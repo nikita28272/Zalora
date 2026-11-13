@@ -136,14 +136,22 @@ def parse_verdict(args: str) -> tuple[int, list[tuple[str, float]], str] | None:
     return num, picks, conf
 
 
-def picks_keyboard(signals) -> InlineKeyboardMarkup | None:
-    """Под двумя исходами босса: по строке кнопок на каждый."""
+def picks_keyboard(signals, num: int | None = None) -> InlineKeyboardMarkup | None:
+    """Под двумя исходами босса: по строке кнопок на каждый и кнопка поздней проверки."""
     rows = [
         [InlineKeyboardButton(text=f"✅ Сделал: {fmt.sig_short(s)}", callback_data=f"bet:{s.id}:placed"),
          InlineKeyboardButton(text="❌ Не ставил", callback_data=f"bet:{s.id}:skip")]
         for s in signals if s.user_decision == "pending"
     ]
+    if rows and num is not None:
+        rows.append([InlineKeyboardButton(text="🥅 Поздняя проверка", callback_data=f"late:{num}")])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def late_check_keyboard(num: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🥅 Поздняя проверка", callback_data=f"late:{num}"),
+    ]])
 
 
 def dossier_keyboard(items: list[int]) -> InlineKeyboardMarkup:
@@ -253,7 +261,9 @@ def _without(markup: InlineKeyboardMarkup | None, signal_id: int) -> InlineKeybo
         return None
     rows = [r for r in markup.inline_keyboard
             if not any((b.callback_data or "").startswith(f"bet:{signal_id}:") for b in r)]
-    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+    if not any((b.callback_data or "").startswith("bet:") for r in rows for b in r):
+        return None  # все исходы отмечены — поздняя проверка уже не нужна
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _drop_row(cb: CallbackQuery, signal_id: int) -> None:
@@ -342,7 +352,23 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await message.answer(str(exc))
             return
         await message.answer(fmt.top_picks(top, db.bankroll()),
-                             reply_markup=picks_keyboard([db.signal(p.signal_id) for p in top.picks]))
+                             reply_markup=picks_keyboard([db.signal(p.signal_id) for p in top.picks], num))
+
+    async def send_late_check(message: Message, num: int) -> None:
+        try:
+            text = engine.late_check(num)
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
+        await message.answer(fmt.dossier_message(text))
+        await message.answer(fmt.LATE_HINT)
+
+    @owner.message(Command("check"))
+    async def cmd_check(message: Message, command: CommandObject) -> None:
+        if not command.args or not command.args.strip().lstrip("#").isdigit():
+            await message.answer("Формат: <code>/check НОМЕР_ДОСЬЕ</code>, например <code>/check 7</code>.")
+            return
+        await send_late_check(message, int(command.args.strip().lstrip("#")))
 
     @owner.message(Command("signals"))
     async def cmd_signals(message: Message) -> None:
@@ -623,6 +649,11 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             .replace(",", " ")
         )
 
+    @owner.callback_query(F.data.startswith("late:"))
+    async def on_late(cb: CallbackQuery) -> None:
+        await cb.answer()
+        await send_late_check(cb.message, int(cb.data.split(":")[1]))
+
     @owner.callback_query(F.data == "bank:edit")
     async def on_bank_edit(cb: CallbackQuery) -> None:
         db.set("awaiting_bet", None)
@@ -768,3 +799,35 @@ async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:
         await run_scan(bot, engine, chat_id)
     else:
         await run_morning_matches(bot, engine, chat_id)
+
+
+def _quiet_now(now_local: datetime) -> bool:
+    """QUIET_HOURS «0-7»: с 00:00 до 07:00 напоминаний нет (бывает и «23-7»)."""
+    raw = settings.quiet_hours.strip()
+    if not raw:
+        return False
+    try:
+        start, end = (int(x) for x in raw.split("-"))
+    except ValueError:
+        return False
+    h = now_local.hour
+    return start <= h < end if start <= end else (h >= start or h < end)
+
+
+async def run_late_checks(bot: Bot, engine: Engine, chat_id: int) -> None:
+    """Каждые 10 минут: перед матчами с неотмеченными прогнозами — напоминание о поздней проверке."""
+    try:
+        due = engine.due_late_checks()
+    except Exception:  # noqa: BLE001
+        log.exception("late checks failed")
+        return
+    if not due or _quiet_now(fmt.local(fmt.now_utc())):
+        return
+    for num in due:
+        try:
+            text = engine.late_check(num)
+        except ValueError:
+            continue
+        engine.mark_late_sent(num)
+        await bot.send_message(chat_id, "⏰ <b>Скоро матч — пора поздней проверки.</b> Скопируйте блок в чат с Claude.")
+        await bot.send_message(chat_id, fmt.dossier_message(text))
