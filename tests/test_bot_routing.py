@@ -157,13 +157,18 @@ def test_dossier_then_top2_verdict_with_buttons_per_pick():
     check = [m for m in session.sent if isinstance(m, SendMessage)][-2]
     assert f"ПРОВЕРКА #{num} ДЛЯ БОССА" in check.text and "language-dossier" in check.text
 
-    # «✅ Сделал» по первому исходу: кэф и сумма
+    # «✅ Сделал» по первому исходу: совет финансиста → «Другая сумма» → сумма → кэф
     asyncio.run(dp.feed_update(bot, _cb(rows[0][0].callback_data)))
-    assert "Какой кэф в вашей конторе" in _texts(session)[-1]
-    asyncio.run(dp.feed_update(bot, _msg("2.20 300")))
+    advice = [m for m in session.sent if isinstance(m, SendMessage)][-1]
+    assert "Ставьте" in advice.text
+    other = [b for r in advice.reply_markup.inline_keyboard for b in r if b.text == "✏️ Другая сумма"][0]
+    asyncio.run(dp.feed_update(bot, _cb(other.callback_data)))
+    asyncio.run(dp.feed_update(bot, _msg("300")))
+    assert "По какому кэфу" in _texts(session)[-1]
+    asyncio.run(dp.feed_update(bot, _msg("2.20")))
     home = db.find_signal(ctx.event.event_id, "home", "boss")
     assert home.placed and home.actual_odds == 2.20 and home.actual_stake == 300
-    assert "Финансист записал" in _texts(session)[-1]
+    assert "Финансист записал" in _texts(session)[-1] and "Прогноз по банку" in _texts(session)[-1]
 
     # «❌ Не ставил» по второму: прогноз остаётся для статистики
     asyncio.run(dp.feed_update(bot, _cb(rows[1][1].callback_data)))
@@ -173,7 +178,7 @@ def test_dossier_then_top2_verdict_with_buttons_per_pick():
     # повторный вердикт после отметок не принимается
     asyncio.run(dp.feed_update(bot, _msg(f"/verdict {num} away 0.3")))
     assert "уже есть ставка" in _texts(session)[-1]
-    assert not any(isinstance(m, EditMessageReplyMarkup) for m in session.sent)  # у тестовых кнопок разметки нет
+    assert any(isinstance(m, EditMessageReplyMarkup) for m in session.sent)  # кнопки совета убраны после ответа
 
 
 def test_bad_verdict_shows_usage():
@@ -259,18 +264,25 @@ def test_financier_plan_from_owner_odds():
     top = engine.manual_top(num, [("home", 0.56)], "medium")
     sid = top.picks[0].signal_id
 
+    # шаг 1: «✅ Сделал» — финансист сразу говорит сумму по банку
     asyncio.run(dp.feed_update(bot, _cb(f"bet:{sid}:placed")))
-    asyncio.run(dp.feed_update(bot, _msg("2.10")))  # только кэф — разбор финансиста
-    plan_msg = [m for m in session.sent if isinstance(m, SendMessage)][-1]
-    assert "Финансист" in plan_msg.text and "54%" in plan_msg.text and "Рекомендую" in plan_msg.text
-    buttons = [b for r in plan_msg.reply_markup.inline_keyboard for b in r]
-    ok = buttons[0]
-    assert ok.text.startswith("✅ Ставлю") and db.signal(sid).user_decision == "pending"
+    advice = [m for m in session.sent if isinstance(m, SendMessage)][-1]
+    assert "Финансист" in advice.text and "54%" in advice.text and "Ставьте" in advice.text
+    ok = [b for r in advice.reply_markup.inline_keyboard for b in r][0]
+    assert ok.text.startswith("✅ Поставил") and db.signal(sid).user_decision == "pending"
+    stake = float(ok.callback_data.split(":")[3])
 
+    # шаг 2: «✅ Поставил N» — бот спрашивает кэф
     asyncio.run(dp.feed_update(bot, _cb(ok.callback_data)))
+    assert "По какому кэфу" in _texts(session)[-1]
+
+    # шаг 3: кэф — ставка записана, разбор и прогноз по банку
+    asyncio.run(dp.feed_update(bot, _msg("2.10")))
     sig = db.signal(sid)
-    assert sig.placed and sig.actual_odds == 2.10 and sig.actual_stake == float(ok.callback_data.split(":")[4])
-    assert "Финансист записал" in _texts(session)[-1]
+    assert sig.placed and sig.actual_odds == 2.10 and sig.actual_stake == stake
+    review = _texts(session)[-1]
+    assert "Финансист записал" in review and "Зайдёт" in review and "Не зайдёт" in review
+    assert db.discipline()[1] == 0  # по совету — нарушений нет
 
     # свой кэф хуже: перевеса нет — не рекомендует, но можно поставить свою сумму
     state = RiskState(10000, 0, 0, 0)

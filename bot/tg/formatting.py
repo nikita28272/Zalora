@@ -416,6 +416,54 @@ def finance_status(st, cfg, discipline: tuple[int, int, list[str]] | None = None
     return "\n".join(lines)
 
 
+def bet_advice(s: Signal, plan, st) -> str:
+    """Шаг 1 после «✅ Сделал»: сколько ставить (по кэфу из досье и текущему банку)."""
+    lines = [f"💰 <b>Финансист: {escape(sig_short(s))}</b> ({escape(s.home)} — {escape(s.away)})",
+             f"Банк {_money(st.bankroll)}. Шанс захода (оценка босса) <b>{plan.p:.0%}</b>, "
+             f"кэф в досье {plan.odds:.2f}."]
+    if plan.stake > 0:
+        lines += [f"✅ Ставьте <b>{_money(plan.stake)}</b> ({plan.pct:.1%} банка) — {escape(plan.reason)}.",
+                  f"Кэф в вашей конторе: в плюс от <b>{1 / plan.p:.2f}</b>, с запасом 3% — от {plan.need_odds:.2f}.",
+                  "Нажмите «✅ Поставил», потом напишите кэф — разберу ставку и дам прогноз по банку."]
+    else:
+        lines.append(f"❌ Не советую ставить: {escape(plan.reason)}.")
+        if plan.max_own > 0:
+            lines.append(f"Если всё же ставите — не больше {_money(plan.max_own)}.")
+    return "\n".join(lines)
+
+
+def bet_review(s: Signal, plan, before, cfg) -> str:
+    """Шаг 3: ставка записана — разбор с вашим кэфом и прогноз по банку."""
+    from ..analysis.bankroll import RiskState, risk_mode
+
+    stake, odds = s.actual_stake or 0, s.actual_odds or plan.odds
+    win = stake * (odds - 1)
+    bank = before.bankroll
+    peak = max(before.peak, bank)
+    lose_state = RiskState(bank - stake, before.bets_today + 1, before.profit_today - stake,
+                           before.losing_streak + 1, peak=peak, week_profit=before.week_profit - stake,
+                           in_play=before.in_play)
+    mode_now, mode_lose = risk_mode(before, cfg), risk_mode(lose_state, cfg)
+    ev_line = (f"✅ перевес при вашем кэфе <b>{plan.ev:+.1%}</b> — хорошая цена" if plan.ev >= cfg.min_edge
+               else f"⚪ перевес {plan.ev:+.1%} — цена так себе" if plan.ev >= 0
+               else f"⚠️ перевес {plan.ev:+.1%}: по нашей оценке кэф мал, нужен от {1 / plan.p:.2f}")
+    lines = [
+        f"💰 <b>Финансист записал ставку #{s.id}</b>: {escape(sig_short(s))} ({escape(s.home)} — {escape(s.away)}), "
+        f"{_money(stake)} по {odds:.2f}.",
+        f"Шанс захода {plan.p:.0%}; {ev_line}.",
+        "",
+        "<b>Прогноз по банку:</b>",
+        f"✅ Зайдёт: +{_money(win)} → банк {_money(bank + win)}"
+        + (" (новый пик)" if bank + win > peak else ""),
+        f"❌ Не зайдёт: −{_money(stake)} → банк {_money(bank - stake)}, просадка {lose_state.drawdown:.0%}, режим "
+        + (f"станет {escape(mode_lose.label)} (ставки ×{mode_lose.multiplier:g})"
+           if mode_lose.multiplier != mode_now.multiplier else "не изменится"),
+        f"В среднем на дистанции: {_money_signed(stake * plan.ev)} с такой ставки.",
+        f"В игре теперь: {_money(before.in_play + stake)} из {_money(cfg.max_exposure_pct * bank)}.",
+    ]
+    return "\n".join(lines)
+
+
 def bet_plan(s: Signal, plan, bank: float) -> str:
     """Разбор финансиста по кэфу владельца: шанс, перевес, сумма, что будет с банком."""
     lines = [

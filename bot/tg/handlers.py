@@ -164,6 +164,34 @@ def picks_keyboard(signals, num: int | None = None) -> InlineKeyboardMarkup | No
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
+def odds_question(sig, stake: float) -> str:
+    example = sig.odds_ref or sig.min_odds
+    return (f"Ставка {stake:,.0f} на <b>{fmt.escape(fmt.sig_short(sig))}</b> ({fmt.escape(sig.home)} — "
+            f"{fmt.escape(sig.away)}). По какому кэфу поставили? Например <code>{example:.2f}</code>"
+            ).replace(",", " ")
+
+
+def clear_states(db: DB) -> None:
+    for key in ("awaiting_bank", "awaiting_dossier_bet", "awaiting_stake", "awaiting_bet",
+                "awaiting_amount", "awaiting_odds"):
+        db.set(key, None)
+
+
+def advice_keyboard(signal_id: int, stake: float) -> InlineKeyboardMarkup:
+    """Под советом финансиста: поставил рекомендованную сумму / другую / не ставлю."""
+    rows = []
+    if stake > 0:
+        rows.append([
+            InlineKeyboardButton(text=f"✅ Поставил {stake:,.0f}".replace(",", " "),
+                                 callback_data=f"fin:amt:{signal_id}:{stake:g}"),
+            InlineKeyboardButton(text="✏️ Другая сумма", callback_data=f"fin:other:{signal_id}:0"),
+        ])
+    else:
+        rows.append([InlineKeyboardButton(text="✏️ Всё равно поставил", callback_data=f"fin:other:{signal_id}:0")])
+    rows.append([InlineKeyboardButton(text="❌ Не ставлю", callback_data=f"bet:{signal_id}:skip")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def plan_keyboard(signal_id: int, odds: float, stake: float) -> InlineKeyboardMarkup:
     """Под разбором финансиста."""
     rows = []
@@ -186,14 +214,16 @@ def signal_plan(db: DB, sig, odds: float):
                     match_in_play=db.match_in_play(sig.event_id, exclude_id=sig.id))
 
 
-def check_discipline(db: DB, sig, plan, amount: float) -> str:
-    """Записывает, следует ли владелец совету, и возвращает предупреждение финансиста (или пусто)."""
+def check_discipline(db: DB, sig, plan, amount: float, advised: float | None = None) -> str:
+    """Записывает, следует ли владелец совету, и возвращает предупреждение финансиста (или пусто).
+    advised — сумма, которую финансист советовал до ставки (если была)."""
     st = db.risk_state()
     warn = []
-    if plan.stake <= 0:
+    rec = advised if advised is not None else plan.stake
+    if rec <= 0:
         warn.append("финансист советовал не ставить")
-    elif amount > 1.5 * plan.stake:
-        warn.append(f"сумма {amount:,.0f} больше совета {plan.stake:,.0f}".replace(",", " "))
+    elif amount > 1.5 * rec:
+        warn.append(f"сумма {amount:,.0f} больше совета {rec:,.0f}".replace(",", " "))
     if amount > settings.max_stake_pct * st.bankroll:
         warn.append(f"больше потолка {settings.max_stake_pct:.0%} банка")
     db.log_discipline(not warn, f"#{sig.id} {fmt.sig_short(sig)}: " + ", ".join(warn) if warn else "")
@@ -655,19 +685,13 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
                 f"{fmt.escape(sig.away)}) вы не ставите. Банк не меняется, итог прогноза попадёт в статистику 📊."
             )
             return
-        db.set("awaiting_bank", None)
-        db.set("awaiting_dossier_bet", None)
-        db.set("awaiting_stake", None)
-        db.set("awaiting_bet", sig.id)
+        clear_states(db)
         await _drop_row(cb, sig.id)  # если передумаете — кнопки есть в «📌 Прогнозы и ставки»
         await cb.answer()
-        example = sig.odds_ref or sig.min_odds
-        await cb.message.answer(
-            f"<b>{fmt.escape(fmt.sig_short(sig))}</b> ({fmt.escape(sig.home)} — {fmt.escape(sig.away)}).\n"
-            f"Какой кэф в вашей конторе? Напишите число, например <code>{example:.2f}</code> — "
-            "финансист посчитает, стоит ли ставить и сколько.\n"
-            f"Если уже поставили и сумма известна — кэф и сумму: <code>{example:.2f} 500</code>"
-        )
+        # шаг 1: финансист сразу говорит, сколько ставить (по кэфу из досье и текущему банку)
+        plan = signal_plan(db, sig, sig.odds_ref or sig.min_odds)
+        await cb.message.answer(fmt.bet_advice(sig, plan, db.risk_state()),
+                                reply_markup=advice_keyboard(sig.id, plan.stake))
 
     @owner.callback_query(F.data.startswith("dossier:"))
     async def on_dossier(cb: CallbackQuery) -> None:
@@ -814,6 +838,22 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if sig is None or sig.kickoff <= datetime.now(timezone.utc):
             await cb.answer("Матч уже начался: работаем только в прематче.", show_alert=True)
             return
+        if action in ("amt", "other"):
+            advised = signal_plan(db, sig, sig.odds_ref or sig.min_odds).stake
+            clear_states(db)
+            await cb.answer()
+            try:
+                await cb.message.edit_reply_markup(reply_markup=None)
+            except Exception as exc:  # noqa: BLE001
+                log.info("edit markup: %s", type(exc).__name__)
+            if action == "amt":  # шаг 2: сумма известна — спрашиваем кэф
+                db.set("awaiting_odds", {"sid": sid, "stake": odds, "advised": advised})
+                await cb.message.answer(odds_question(sig, odds))
+            else:
+                db.set("awaiting_amount", {"sid": sid, "advised": advised})
+                await cb.message.answer(f"Сколько поставили на {fmt.escape(fmt.sig_short(sig))}? "
+                                        "Напишите сумму числом, например 300.")
+            return
         if action == "own":
             db.set("awaiting_bet", None)
             db.set("awaiting_bank", None)
@@ -854,6 +894,43 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(F.text & ~F.text.startswith("/"))
     async def on_bet_input(message: Message) -> None:
+        amount_state = db.get("awaiting_amount")
+        if amount_state:
+            raw = (message.text or "").replace(" ", "").replace(",", ".")
+            try:
+                amount = float(raw)
+                if amount <= 0:
+                    raise ValueError
+            except ValueError:
+                await message.answer("Не понял. Напишите сумму числом, например 300.")
+                return
+            sig = db.signal(int(amount_state["sid"]))
+            db.set("awaiting_amount", None)
+            if sig is None or sig.kickoff <= datetime.now(timezone.utc):
+                await message.answer("Матч уже начался: работаем только в прематче, отметку не принимаю.")
+                return
+            db.set("awaiting_odds", {"sid": sig.id, "stake": amount, "advised": amount_state["advised"]})
+            await message.answer(odds_question(sig, amount))
+            return
+        odds_state = db.get("awaiting_odds")
+        if odds_state:
+            parsed = parse_bet_input(message.text or "")
+            if parsed is None:
+                await message.answer("Не понял. Напишите кэф числом, например 2.15.")
+                return
+            odds, override = parsed
+            sig = db.signal(int(odds_state["sid"]))
+            db.set("awaiting_odds", None)
+            if sig is None or sig.kickoff <= datetime.now(timezone.utc):
+                await message.answer("Матч уже начался: работаем только в прематче, отметку не принимаю.")
+                return
+            stake = override or float(odds_state["stake"])
+            before = db.risk_state()
+            plan = signal_plan(db, sig, odds)  # разбор с вашим реальным кэфом
+            warn = check_discipline(db, sig, plan, stake, advised=float(odds_state.get("advised") or 0))
+            db.decide(sig.id, placed=True, odds=odds, stake=stake)
+            await message.answer(fmt.bet_review(db.signal(sig.id), plan, before, settings) + warn)
+            return
         pending_bet = db.get("awaiting_dossier_bet")
         if pending_bet:
             parsed = parse_bet_input(message.text or "")
