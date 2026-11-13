@@ -19,12 +19,8 @@ from zoneinfo import ZoneInfo
 from .analysis.bankroll import RiskState
 from .config import settings
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS kv (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS signals (
+SIGNALS_TABLE = """
+CREATE TABLE IF NOT EXISTS {name} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
     event_id TEXT NOT NULL,
@@ -54,8 +50,17 @@ CREATE TABLE IF NOT EXISTS signals (
     settled_at TEXT,
     sport TEXT NOT NULL DEFAULT 'football',
     line REAL,
-    UNIQUE(event_id, selection)
+    source TEXT NOT NULL DEFAULT 'boss',
+    UNIQUE(event_id, selection, source)
 );
+"""
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS llm_usage (
     day TEXT NOT NULL,
     analyses INTEGER NOT NULL DEFAULT 0,
@@ -110,6 +115,7 @@ class Signal:
     settled_at: str | None
     sport: str = "football"
     line: float | None = None  # линия тотала/форы
+    source: str = "boss"  # boss — прогноз босса (/verdict), user — ставка владельца без вердикта
 
     @property
     def placed(self) -> bool:
@@ -155,7 +161,8 @@ def month_start_utc() -> str:
 
 def summarize(signals: list[Signal], real: bool) -> Summary | None:
     """Сводка по рассчитанным сигналам: real=True — только поставленные, иначе бумажный учёт всех."""
-    rows = [s for s in signals if s.status in ("won", "lost") and (s.placed or not real)]
+    # реальный учёт — все ваши ставки; бумажный — только прогнозы босса
+    rows = [s for s in signals if s.status in ("won", "lost") and (s.placed if real else s.source == "boss")]
     if not rows:
         return None
     staked = sum((s.actual_stake if real else s.stake) or 0 for s in rows)
@@ -185,13 +192,27 @@ class DB:
         self.conn = sqlite3.connect(path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self.conn.executescript(SIGNALS_TABLE.format(name="signals"))
         existing = {r["name"] for r in self.conn.execute("PRAGMA table_info(signals)")}
         for col, decl in _MIGRATIONS.items():
             if col not in existing:
                 self.conn.execute(f"ALTER TABLE signals ADD COLUMN {col} {decl}")
+        if "source" not in existing:
+            self._rebuild_signals()
         usage_cols = {r["name"] for r in self.conn.execute("PRAGMA table_info(llm_usage)")}
         if "cost_usd" not in usage_cols:
             self.conn.execute("ALTER TABLE llm_usage ADD COLUMN cost_usd REAL NOT NULL DEFAULT 0")
+        self.conn.commit()
+
+    def _rebuild_signals(self) -> None:
+        """Старая база: уникальность была (матч, исход). Теперь (матч, исход, источник) —
+        прогноз босса и ваша ставка на один исход хранятся отдельно. Данные переносим."""
+        cols = [r["name"] for r in self.conn.execute("PRAGMA table_info(signals)")]
+        col_list = ", ".join(cols)
+        self.conn.executescript(SIGNALS_TABLE.format(name="signals_new"))
+        self.conn.execute(f"INSERT INTO signals_new ({col_list}) SELECT {col_list} FROM signals")
+        self.conn.execute("DROP TABLE signals")
+        self.conn.execute("ALTER TABLE signals_new RENAME TO signals")
         self.conn.commit()
 
     # ---------- key-value ----------
@@ -281,7 +302,20 @@ class DB:
         return self._row(row) if row else None
 
     def has_signal(self, event_id: str) -> bool:
-        return bool(self.conn.execute("SELECT 1 FROM signals WHERE event_id = ?", (event_id,)).fetchone())
+        """Есть ли уже прогноз босса на этот матч."""
+        return bool(self.conn.execute(
+            "SELECT 1 FROM signals WHERE event_id = ? AND source = 'boss'", (event_id,)).fetchone())
+
+    def find_signal(self, event_id: str, selection: str | None = None, source: str | None = None) -> Signal | None:
+        q, args = "SELECT * FROM signals WHERE event_id = ?", [event_id]
+        if selection:
+            q += " AND selection = ?"
+            args.append(selection)
+        if source:
+            q += " AND source = ?"
+            args.append(source)
+        row = self.conn.execute(q + " ORDER BY id DESC LIMIT 1", args).fetchone()
+        return self._row(row) if row else None
 
     def pending(self) -> list[Signal]:
         rows = self.conn.execute("SELECT * FROM signals WHERE status = 'pending' ORDER BY kickoff")

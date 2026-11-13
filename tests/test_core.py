@@ -316,3 +316,34 @@ def test_quota_tracking_persists_and_warns(monkeypatch):
     restarted = Engine(db)  # после перезапуска бот помнит остаток из базы
     line = fmt.quota_line(restarted.quota())
     assert "осталось <b>42</b> из 500" in line and "заканчиваются" in line
+
+
+def test_old_database_is_migrated_with_sources(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(path)
+    conn.executescript("""
+    CREATE TABLE signals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, event_id TEXT NOT NULL,
+        league_code TEXT NOT NULL, league_name TEXT NOT NULL, home TEXT NOT NULL, away TEXT NOT NULL,
+        kickoff TEXT NOT NULL, selection TEXT NOT NULL, odds_ref REAL NOT NULL, min_odds REAL NOT NULL,
+        p_final REAL NOT NULL, p_market REAL NOT NULL, p_model REAL, edge REAL NOT NULL, stake REAL NOT NULL,
+        confidence TEXT NOT NULL, reasoning TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+        score TEXT, profit REAL, settled_at TEXT, UNIQUE(event_id, selection));
+    INSERT INTO signals (created_at, event_id, league_code, league_name, home, away, kickoff, selection,
+        odds_ref, min_odds, p_final, p_market, edge, stake, confidence, reasoning)
+    VALUES ('2026-11-10T00:00:00+00:00', 'e1', 'PL', 'АПЛ', 'A', 'B', '2026-11-10T20:00:00+00:00', 'home',
+        2.0, 1.9, 0.55, 0.5, 0.1, 100, 'medium', 'r');
+    """)
+    conn.commit()
+    conn.close()
+
+    db = DB(str(path))
+    old = db.signal(1)
+    assert old.source == "boss" and old.sport == "football" and old.user_decision == "pending"
+    base = dict(league_code="PL", league_name="АПЛ", home="A", away="B", kickoff=old.kickoff.isoformat(),
+                odds_ref=2.0, min_odds=1.9, p_final=0.55, p_market=0.5, edge=0.1, stake=100,
+                confidence="user", reasoning="r")
+    # тот же матч и исход, но ставка владельца — теперь допустимо
+    assert db.add_signal(event_id="e1", selection="home", source="user", **base) is not None

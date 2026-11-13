@@ -134,9 +134,11 @@ def dossier_keyboard(items: list[int]) -> InlineKeyboardMarkup:
 
 
 # ---------- кнопки ----------
-BTN_CANDIDATES = "📋 Кандидаты"
+BTN_ANALYZE = "🔍 Анализ"
+BTN_CANDIDATES = "📋 Кандидаты"  # кнопка старой версии меню — продолжает работать
 BTN_MATCHES = "📅 Матчи"
-BTN_SIGNALS = "📌 Мои сигналы"
+BTN_SIGNALS = "📌 Прогнозы и ставки"
+BTN_SIGNALS_OLD = "📌 Мои сигналы"
 BTN_STATS = "📊 Статистика"
 BTN_BANK = "💰 Банк"
 BTN_CREDITS = "💳 Кредиты"
@@ -147,7 +149,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
     """Постоянное меню внизу экрана вместо обычной клавиатуры."""
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text=BTN_CANDIDATES), KeyboardButton(text=BTN_MATCHES)],
+            [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_ANALYZE)],
             [KeyboardButton(text=BTN_SIGNALS), KeyboardButton(text=BTN_STATS)],
             [KeyboardButton(text=BTN_BANK), KeyboardButton(text=BTN_CREDITS)],
             [KeyboardButton(text=BTN_MORE)],
@@ -156,6 +158,35 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         is_persistent=True,
         input_field_placeholder="Выберите действие или вставьте /verdict …",
     )
+
+
+def analyze_button() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔍 Анализ", callback_data="menu:analyze"),
+    ]])
+
+
+def dossier_bet_keyboard(num: int) -> InlineKeyboardMarkup:
+    """Кнопки сразу под досье."""
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✅ Ставил", callback_data=f"dbet:{num}:placed"),
+        InlineKeyboardButton(text="❌ Не ставил", callback_data=f"dbet:{num}:skip"),
+    ]])
+
+
+def outcome_keyboard(ctx, num: int, highlight: set[str] | None = None) -> InlineKeyboardMarkup:
+    """На какой исход поставили: кнопки по рынкам вида спорта, по рынку в строке."""
+    highlight = highlight or set()
+    rows = []
+    for group in ctx.sport.groups:
+        row = [
+            InlineKeyboardButton(text=("⭐ " if sel in highlight else "") + ctx.short(sel),
+                                 callback_data=f"dsel:{num}:{sel}")
+            for sel in group if sel in ctx.market.fair
+        ]
+        if row:
+            rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def more_keyboard() -> InlineKeyboardMarkup:
@@ -232,7 +263,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             except ValueError as exc:
                 await message.answer(str(exc))
                 return
-            await message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
+            await message.answer(fmt.dossier_message(engine.dossier(ctx, num)), reply_markup=dossier_bet_keyboard(num))
             await message.answer(fmt.DOSSIER_HINT)
             return
         await message.answer("Агенты работают: новости, эксперты, адвокат дьявола, главный аналитик. Это 1–3 минуты…")
@@ -406,6 +437,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             )
             return
         db.set("awaiting_bank", None)
+        db.set("awaiting_dossier_bet", None)
         db.set("awaiting_bet", sig.id)
         await cb.answer()
         await cb.message.answer(
@@ -422,19 +454,44 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await cb.answer("Досье устарело. Запросите новое: /scan", show_alert=True)
             return
         await cb.answer()
-        await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
+        await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)), reply_markup=dossier_bet_keyboard(num))
         await cb.message.answer(fmt.DOSSIER_HINT)
 
     # ---------- кнопки постоянного меню ----------
+    async def show_analyze(message: Message) -> None:
+        """«🔍 Анализ»: какой матч разобрать — кнопки с номерами."""
+        if not engine.matches:
+            await message.answer("Загружаю матчи…")
+            try:
+                await engine.load_matches()
+            except Exception as exc:  # noqa: BLE001
+                log.exception("load_matches failed")
+                await message.answer(f"Не удалось загрузить матчи: {type(exc).__name__}")
+                return
+        if not engine.matches:
+            await message.answer("Ближайших матчей нет.")
+            return
+        lines = ["🔍 <b>Какой матч разобрать?</b>", ""]
+        for m in engine.matches[:30]:
+            flag = " 🔎" if m.quant_candidates() else ""
+            lines.append(f"<b>{m.idx}.</b> {m.sport.emoji} {fmt.local(m.event.kickoff):%d.%m %H:%M} "
+                         f"{fmt.escape(m.title)}{flag}")
+        lines += ["", "🔎 — модель видит возможный перевес."]
+        await send_long(message.bot, message.chat.id, "\n".join(lines), matches_keyboard(engine.matches))
+
+    @owner.message(F.text == BTN_ANALYZE)
+    async def b_analyze(message: Message) -> None:
+        await show_analyze(message)
+
     @owner.message(F.text == BTN_CANDIDATES)
     async def b_candidates(message: Message) -> None:
-        await cmd_scan(message)
+        await show_analyze(message)
 
     @owner.message(F.text == BTN_MATCHES)
     async def b_matches(message: Message) -> None:
         await cmd_matches(message)
 
-    @owner.message(F.text == BTN_SIGNALS)
+    @owner.message(F.text.in_({BTN_SIGNALS, BTN_SIGNALS_OLD}))
     async def b_signals(message: Message) -> None:
         await cmd_signals(message)
 
@@ -460,7 +517,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await cb.answer()
         handlers = {
             "history": cmd_history, "limits": cmd_limits, "settle": cmd_settle,
-            "resume": cmd_resume, "usage": cmd_usage, "help": cmd_help,
+            "resume": cmd_resume, "usage": cmd_usage, "help": cmd_help, "analyze": show_analyze,
         }
         handler = handlers.get(action)
         if handler:
@@ -476,15 +533,82 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await cb.answer("Готовлю…")
         await pick_match(cb.message, ctx.idx)
 
+    @owner.callback_query(F.data.startswith("dbet:"))
+    async def on_dossier_bet(cb: CallbackQuery) -> None:
+        _, num_s, action = cb.data.split(":")
+        num = int(num_s)
+        if action == "skip":
+            try:
+                ctx = engine.skip_dossier(num)
+            except ValueError as exc:
+                await cb.answer(str(exc), show_alert=True)
+                return
+            db.set("awaiting_dossier_bet", None)
+            await cb.answer("Записал: не ставили")
+            await cb.message.answer(
+                f"🧠 Принял: на матч {fmt.escape(ctx.title)} вы не ставите. Если по нему есть мой прогноз "
+                "(/verdict), он попадёт в статистику на бумаге, банк не меняется."
+            )
+            return
+        ctx = engine.load_candidate(num)
+        if ctx is None or ctx.event.kickoff <= fmt.now_utc():
+            await cb.answer("Матч уже начался или досье устарело: отметку не принимаю.", show_alert=True)
+            return
+        boss = {s.selection for s in db.pending() if s.event_id == ctx.event.event_id and s.source == "boss"}
+        await cb.answer()
+        await cb.message.answer(
+            f"На какой исход поставили? {fmt.escape(ctx.title)}"
+            + ("\n⭐ — прогноз босса" if boss else ""),
+            reply_markup=outcome_keyboard(ctx, num, boss),
+        )
+
+    @owner.callback_query(F.data.startswith("dsel:"))
+    async def on_dossier_selection(cb: CallbackQuery) -> None:
+        _, num_s, sel = cb.data.split(":")
+        num = int(num_s)
+        ctx = engine.load_candidate(num)
+        if ctx is None or ctx.event.kickoff <= fmt.now_utc():
+            await cb.answer("Матч уже начался или досье устарело: отметку не принимаю.", show_alert=True)
+            return
+        db.set("awaiting_bet", None)
+        db.set("awaiting_bank", None)
+        db.set("awaiting_dossier_bet", {"num": num, "sel": sel})
+        boss = db.find_signal(ctx.event.event_id, sel, "boss")
+        default = boss.stake if boss else db.bankroll() * 0.01
+        example = f"{boss.min_odds:.2f}" if boss else f"{ctx.market.avg_odds.get(sel, 2.0):.2f}"
+        await cb.answer()
+        await cb.message.answer(
+            f"<b>{fmt.escape(ctx.short(sel))}</b>. По какому коэффициенту и на какую сумму поставили?\n"
+            f"Например: <code>{example} 500</code>. Если сумму не написать, запишу {default:,.0f}."
+            .replace(",", " ")
+        )
+
     @owner.callback_query(F.data == "bank:edit")
     async def on_bank_edit(cb: CallbackQuery) -> None:
         db.set("awaiting_bet", None)
+        db.set("awaiting_dossier_bet", None)
         db.set("awaiting_bank", True)
         await cb.answer()
         await cb.message.answer("Напишите новый банк числом, например <code>15000</code>.")
 
     @owner.message(F.text & ~F.text.startswith("/"))
     async def on_bet_input(message: Message) -> None:
+        pending_bet = db.get("awaiting_dossier_bet")
+        if pending_bet:
+            parsed = parse_bet_input(message.text or "")
+            if parsed is None:
+                await message.answer("Не понял. Напишите коэффициент и сумму, например 2.15 500.")
+                return
+            odds, stake = parsed
+            try:
+                sig = engine.record_user_bet(pending_bet["num"], pending_bet["sel"], odds, stake)
+            except ValueError as exc:
+                db.set("awaiting_dossier_bet", None)
+                await message.answer(str(exc))
+                return
+            db.set("awaiting_dossier_bet", None)
+            await message.answer(fmt.placed_confirmation(sig, db.bankroll(), db.in_play()))
+            return
         if db.get("awaiting_bank"):
             raw = (message.text or "").replace(" ", "").replace(",", ".")
             try:
@@ -586,8 +710,21 @@ async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
     await bot.send_message(chat_id, text, reply_markup=kb)
 
 
+async def run_morning_matches(bot: Bot, engine: Engine, chat_id: int) -> None:
+    """11:00: все матчи футбола и хоккея на 48 часов и кнопка «🔍 Анализ»."""
+    try:
+        matches = await engine.load_matches(max_age_minutes=settings.odds_scan_max_age_minutes)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("morning matches failed")
+        await bot.send_message(chat_id, f"Не удалось загрузить матчи: {type(exc).__name__}")
+        return
+    text = (f"☀️ <b>Матчи на {settings.lookahead_hours} часов</b>\n\n" + fmt.matches_list(matches)
+            + "\n\n" + fmt.odds_footer(engine.last_report, engine.quota()))
+    await send_long(bot, chat_id, text, analyze_button() if matches else None)
+
+
 async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:
     if settings.api_mode:
         await run_scan(bot, engine, chat_id)
     else:
-        await run_candidates(bot, engine, chat_id)
+        await run_morning_matches(bot, engine, chat_id)

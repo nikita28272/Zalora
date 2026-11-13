@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 from .agents import team
 from .agents.llm import AgentError, AgentRun
 from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
-from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds
+from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds, round_stake
 from .analysis.market import MarketView, market_view
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, League, settings
@@ -734,6 +734,68 @@ class Engine:
         )
         self._finalize(res)
         return res
+
+    # ---------- ваши ставки из досье ----------
+    def _dossier_ctx(self, num: int) -> MatchContext:
+        ctx = self.load_candidate(num)
+        if ctx is None:
+            raise ValueError(f"Досье #{num} не найдено (или устарело). Запросите новое: «🔍 Анализ».")
+        if ctx.event.kickoff <= datetime.now(timezone.utc):
+            raise ValueError("Матч уже начался: работаем только в прематче, отметку не принимаю.")
+        return ctx
+
+    def record_user_bet(self, num: int, selection: str, odds: float, stake: float | None) -> Signal:
+        """«✅ Ставил» под досье: финансист записывает реальную ставку.
+
+        Если на этот исход уже есть прогноз босса (/verdict) — отмечаем его как поставленный.
+        Иначе заводим отдельную запись «ставка владельца»: банк она меняет,
+        но в бумажную статистику прогнозов босса не попадает.
+        """
+        ctx = self._dossier_ctx(num)
+        group_of(ctx.sport, selection)  # проверка, что исход подходит виду спорта
+        boss = self.db.find_signal(ctx.event.event_id, selection, "boss")
+        if boss:
+            self.db.decide(boss.id, placed=True, odds=odds, stake=stake or boss.stake)
+            return self.db.signal(boss.id)
+        own = self.db.find_signal(ctx.event.event_id, selection, "user")
+        stake = stake or (own.stake if own else round_stake(self.db.bankroll() * 0.01))
+        if own is None:
+            pm = ctx.market.fair.get(selection)
+            sid = self.db.add_signal(
+                event_id=ctx.event.event_id,
+                league_code=ctx.event.league.fd_code,
+                league_name=ctx.event.league.name_ru,
+                home=ctx.event.home_team,
+                away=ctx.event.away_team,
+                kickoff=ctx.event.kickoff.isoformat(),
+                selection=selection,
+                odds_ref=ctx.market.avg_odds.get(selection) or odds,
+                min_odds=odds,
+                p_final=round(pm or 1 / odds, 4),
+                p_market=round(pm or 1 / odds, 4),
+                p_model=round(ctx.model.probs[selection], 4) if ctx.model and selection in ctx.model.probs else None,
+                edge=round((pm * odds - 1) if pm else 0.0, 4),
+                stake=stake,
+                confidence="user",
+                reasoning="Ставка владельца по досье",
+                sport=ctx.sport.key,
+                line=ctx.line(selection),
+                source="user",
+            )
+            own = self.db.signal(sid)
+        self.db.decide(own.id, placed=True, odds=odds, stake=stake)
+        return self.db.signal(own.id)
+
+    def skip_dossier(self, num: int) -> MatchContext:
+        """«❌ Не ставил» под досье: прогнозы босса на этот матч идут только в статистику."""
+        ctx = self._dossier_ctx(num)
+        for row in self.db.conn.execute(
+            "SELECT id FROM signals WHERE event_id = ? AND source = 'boss' AND user_decision = 'pending'",
+            (ctx.event.event_id,),
+        ):
+            self.db.decide(row["id"], placed=False)
+        self.db.set(f"dossier_skip:{num}", True)
+        return ctx
 
     # ---------- проверка исходов (аналитик) и учёт (финансист) ----------
     async def settle(self) -> list[Signal]:

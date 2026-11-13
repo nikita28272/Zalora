@@ -159,7 +159,7 @@ def test_full_flow_placed_bet_settles_into_bank():
     assert len(settled) == 1 and settled[0].status == "won"
     assert db.bankroll() == bank_before + 300 * 1.20
     report = fmt.settle_report(settled, db.bankroll())
-    assert "Статистик проверил исход" in report and "+360" in report
+    assert "🧠 Прогноз: П1 — ✅ зашла" in report and "Вы поставили" in report and "+360" in report
     text = fmt.stats(db.settled(since=month_start_utc()), db.settled(), db.bankroll())
     assert "ROI +120.0%" in text
 
@@ -267,12 +267,12 @@ def test_parse_verdict_variants():
 
 # ---------- кнопки ----------
 def test_keyboards():
-    from bot.tg.handlers import (BTN_CANDIDATES, bank_keyboard, main_keyboard, matches_keyboard,
+    from bot.tg.handlers import (BTN_ANALYZE, bank_keyboard, main_keyboard, matches_keyboard,
                                  more_keyboard, signals_keyboard)
 
     kb = main_keyboard()
     texts = [b.text for row in kb.keyboard for b in row]
-    assert BTN_CANDIDATES in texts and len(texts) == 7 and kb.is_persistent
+    assert BTN_ANALYZE in texts and len(texts) == 7 and kb.is_persistent
 
     ctxs = []
     for i in range(7):
@@ -295,3 +295,29 @@ def test_keyboards():
 
     assert {b.callback_data for r in more_keyboard().inline_keyboard for b in r} >= {"menu:history", "menu:settle"}
     assert bank_keyboard().inline_keyboard[0][0].callback_data == "bank:edit"
+
+
+def test_morning_report_groups_boss_prediction_and_user_bet():
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _ctx(datetime.now(timezone.utc) + timedelta(days=1))
+    num = engine.save_candidate(ctx)
+    boss = engine.manual_verdict(num, "home", 0.56, "medium")
+    user = engine.record_user_bet(num, "over", 1.95, 200)
+    db.conn.execute("UPDATE signals SET kickoff = ?",
+                    ((datetime.now(timezone.utc) - timedelta(hours=5)).isoformat(),))
+    bank_before = db.bankroll()
+
+    async def fake_finished(codes, date_from, date_to):
+        return [Result(1, "PL", datetime.now(timezone.utc) - timedelta(hours=5), "Arsenal FC", "Chelsea FC", 0, 1)]
+
+    engine.stats.finished_between = fake_finished
+    settled = asyncio.run(engine.settle())
+    assert {s.source for s in settled} == {"boss", "user"}
+    assert db.bankroll() == bank_before - 200  # банк меняет только ваша ставка
+    report = fmt.settle_report(settled, db.bankroll())
+    assert report.count("Arsenal — Chelsea") == 1  # один блок на матч
+    assert "🧠 Прогноз: П1 — ❌ не зашла" in report and "записано в статистику" in report
+    assert "💰 Ваша ставка: ТБ2.5" in report
+    stats = fmt.stats(db.settled(), db.settled(), db.bankroll())
+    assert "Прогнозы босса" in stats

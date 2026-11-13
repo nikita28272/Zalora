@@ -64,12 +64,13 @@ FLOW_API = """<b>Ваш порядок действий</b>
 2. Жмёте «✅ Поставил» и пишете коэффициент (и сумму, если она другая) или «❌ Не ставил».
 3. После матча главный докладывает итог и новый баланс."""
 
-FLOW_MANUAL = """<b>Режим «босс в чате»</b>
-1. Бот присылает кандидатов дня. Жмёте «📋 Досье» и копируете текст.
-2. Вставляете досье в чат с Claude: босс запускает субагентов и выносит вердикт.
-3. Строку <code>/verdict …</code> из ответа босса отправляете сюда.
-4. Финансист считает сумму, приходит сигнал: «✅ Поставил» или «❌ Не ставил».
-5. После матча бот докладывает итог и новый баланс."""
+FLOW_MANUAL = f"""<b>Как это работает</b>
+1. В {settings.scan_time} бот присылает матчи футбола и хоккея на {settings.lookahead_hours} часов.
+2. «🔍 Анализ» → номер матча → досье. Копируете его и отправляете в чат с Claude (боссу).
+3. Строку <code>/verdict …</code> из ответа босса отправляете сюда: прогноз попадёт в статистику.
+4. Под досье — «✅ Ставил» (исход, кэф и сумма) или «❌ Не ставил».
+5. В {settings.settle_time} — итоги только по матчам с прогнозами: ваши ставки меняют банк,
+   остальные прогнозы идут в статистику 📊."""
 
 
 def help_text() -> str:
@@ -117,7 +118,7 @@ def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
         )
     if len(matches) > limit:
         lines.append(f"…и ещё {len(matches) - limit}")
-    lines += ["", "🔎 — модель видит возможный перевес. Разбор: /analyze N"]
+    lines += ["", "🔎 — модель видит возможный перевес. Разбор: кнопка «🔍 Анализ»."]
     return "\n".join(lines)
 
 
@@ -284,29 +285,35 @@ def placed_confirmation(s: Signal, bank: float, in_play: tuple[int, float]) -> s
 
 
 def settle_report(settled: list[Signal], bank: float) -> str:
-    lines = ["🧠 <b>Доклад главного аналитика: итоги матчей</b>", ""]
-    real_total = 0.0
+    """09:00: итоги только по матчам, на которые давался прогноз. Сгруппировано по матчу."""
+    lines = ["🧠 <b>Доклад главного аналитика: итоги прогнозов</b>"]
+    by_event: dict[str, list[Signal]] = {}
     for s in settled:
-        if s.status == "void":
-            if s.score and s.score != "нет данных":
-                lines.append(f"↩️ #{s.id} {escape(s.home)} — {escape(s.away)} {escape(s.score)}: "
-                             f"{escape(_sig_short(s))} — возврат ставки (ровно по линии).")
+        by_event.setdefault(s.event_id, []).append(s)
+    real_total = 0.0
+    for group in by_event.values():
+        first = group[0]
+        score = first.score if first.score and first.score != "нет данных" else "результат не найден"
+        lines += ["", f"{_sig_emoji(first)} <b>{escape(first.home)} — {escape(first.away)}</b>: {escape(score)}"]
+        for s in sorted(group, key=lambda x: x.source != "boss"):
+            mark = {"won": "✅ зашла", "lost": "❌ не зашла", "void": "↩️ возврат"}.get(s.status, s.status)
+            label = escape(_sig_short(s))
+            if s.source == "boss":
+                line = f"   🧠 Прогноз: {label} — {mark}"
+                if s.status in ("won", "lost"):
+                    line += f" (на бумаге {s.paper_profit:+,.0f})".replace(",", " ")
+                lines.append(line)
+                if s.placed:
+                    real_total += s.profit or 0
+                    lines.append(f"   💰 Вы поставили {_money(s.actual_stake or 0)} по {s.actual_odds or s.min_odds:.2f}: "
+                                 f"{(s.profit or 0):+,.0f}".replace(",", " "))
+                else:
+                    lines.append("   Вы не ставили — записано в статистику 📊")
             else:
-                lines.append(f"↩️ #{s.id} {escape(s.home)} — {escape(s.away)}: результат не найден, "
-                             "сигнал закрыт без расчёта.")
-            continue
-        outcome = "зашла ✅" if s.status == "won" else "не зашла ❌"
-        lines.append(
-            f"📊 Статистик проверил исход: {_sig_emoji(s)} {escape(s.home)} — {escape(s.away)} {escape(s.score or '')}. "
-            f"{escape(_sig_short(s))} {outcome}"
-        )
-        if s.placed:
-            real_total += s.profit or 0
-            lines.append(f"   💰 Финансист: {s.profit:+,.0f}".replace(",", " "))
-        else:
-            lines.append(f"   Вы не ставили. На бумаге: {s.paper_profit:+,.0f}".replace(",", " "))
-    lines.append("")
-    lines.append(f"💰 Итог по вашим ставкам: {real_total:+,.0f}. Банк: <b>{_money(bank)}</b>".replace(",", " "))
+                real_total += s.profit or 0
+                lines.append(f"   💰 Ваша ставка: {label} {_money(s.actual_stake or 0)} по "
+                             f"{s.actual_odds or s.min_odds:.2f} — {mark}, {(s.profit or 0):+,.0f}".replace(",", " "))
+    lines += ["", f"💰 Итог по вашим ставкам: {real_total:+,.0f}. Банк: <b>{_money(bank)}</b>".replace(",", " ")]
     return "\n".join(lines)
 
 
@@ -328,7 +335,7 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
     parts = [
         _summary_block("Ваши ставки за месяц", real_m),
         _summary_block("Ваши ставки за всё время", summarize(all_time, real=True)),
-        _summary_block("Все сигналы системы (на бумаге, по мин. кэфу)", summarize(all_time, real=False)),
+        _summary_block("Прогнозы босса (на бумаге, по мин. кэфу)", summarize(all_time, real=False)),
         f"<b>Банк:</b> {_money(bankroll)}",
     ]
     if real_m and bankroll - real_m.profit > 0:
@@ -415,3 +422,8 @@ def scan_report_line(r: ScanReport | None) -> str:
 def odds_footer(report: ScanReport | None, quota: Quota | None) -> str:
     line = scan_report_line(report)
     return (line + "\n" if line else "") + quota_line(quota)
+
+
+def now_utc():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc)
