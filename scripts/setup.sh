@@ -70,6 +70,10 @@ echo "Собираю и запускаю бота (первый раз 2–5 м�
 docker compose up -d --build
 
 echo
+echo "Проверяю ключи и источники данных…"
+docker compose run --rm bot python -m bot.check || true
+
+echo
 echo "✅ Бот запущен."
 echo "Дальше: напишите своему боту в Telegram любое сообщение — он пришлёт ваш ID."
 echo "Затем выполните:  bash scripts/set.sh TELEGRAM_OWNER_ID ВАШ_ID"

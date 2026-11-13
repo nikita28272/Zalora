@@ -87,6 +87,7 @@ Telegram-бот, который ищет ценные ставки (value bets) 
 
 | Что | Команда |
 |---|---|
+| Проверить ключи и источники | `bash scripts/check.sh` |
 | Поменять настройку | `bash scripts/set.sh MAX_LLM_ANALYSES_PER_DAY 2` |
 | Посмотреть логи | `docker compose logs --tail 50` |
 | Обновить бота | `git pull && docker compose up -d --build` |
