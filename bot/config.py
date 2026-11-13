@@ -45,6 +45,33 @@ LEAGUES: tuple[League, ...] = _enabled_leagues()
 LEAGUES_BY_ODDS_KEY = {lg.odds_key: lg for lg in ALL_LEAGUES}
 
 
+# Профили риска финансиста: доля Келли, предохранитель на ставку, всё в игре, один матч, база ставки НБА «по анализу»
+RISK_PROFILES = {
+    "careful": {"kelly": 0.25, "cap": 0.02, "exposure": 0.06, "match": 0.03, "nba": 0.01},
+    "moderate": {"kelly": 0.4, "cap": 0.05, "exposure": 0.12, "match": 0.06, "nba": 0.015},
+    "aggressive": {"kelly": 0.6, "cap": 0.08, "exposure": 0.20, "match": 0.10, "nba": 0.025},
+}
+RISK_NAMES_RU = {"careful": "осторожный", "moderate": "умеренный", "aggressive": "агрессивный"}
+
+
+def _risk_profile() -> str:
+    name = os.getenv("RISK_PROFILE", "moderate").strip().lower()
+    aliases = {"осторожный": "careful", "умеренный": "moderate", "агрессивный": "aggressive"}
+    name = aliases.get(name, name)
+    return name if name in RISK_PROFILES else "moderate"
+
+
+def _profiled(env: str, key: str) -> float:
+    """Значение из .env, если задано явно, иначе — из профиля риска."""
+    raw = os.getenv(env, "").strip()
+    if raw:
+        try:
+            return float(raw.replace(",", "."))
+        except ValueError:
+            pass
+    return RISK_PROFILES[_risk_profile()][key]
+
+
 def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default).strip()
 
@@ -115,7 +142,7 @@ class Settings:
     daily_window_hours: int = field(default_factory=lambda: _int("DAILY_WINDOW_HOURS", 30))  # «ближайшие сутки»
     nba_top: int = field(default_factory=lambda: _int("NBA_TOP", 3))  # сколько матчей НБА в день предлагать
     nba_min_factor: float = field(default_factory=lambda: _float("NBA_MIN_FACTOR", 2.0))  # порог перекоса графика
-    nba_stake_pct: float = field(default_factory=lambda: _float("NBA_STAKE_PCT", 0.01))  # ставка при уверенном разборе
+    nba_stake_pct: float = field(default_factory=lambda: _profiled("NBA_STAKE_PCT", "nba"))  # база ставки НБА
     nba_max_prob_deviation: float = field(default_factory=lambda: _float("NBA_MAX_PROB_DEVIATION", 0.12))
     # Если линии уже загружались сегодня (например, днём нажали «🔍 Анализ») не раньше чем за столько часов,
     # ежедневный список в SCAN_TIME берёт их из кеша и не тратит кредиты; 0 — всегда загружать заново
@@ -150,15 +177,17 @@ class Settings:
 
     # --- банкролл и лимиты (финансист) ---
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))
-    kelly_fraction: float = field(default_factory=lambda: _float("KELLY_FRACTION", 0.25))
-    max_stake_pct: float = field(default_factory=lambda: _float("MAX_STAKE_PCT", 0.02))
+    # Профиль риска: careful / moderate / aggressive (осторожный / умеренный / агрессивный)
+    risk_profile: str = field(default_factory=_risk_profile)
+    kelly_fraction: float = field(default_factory=lambda: _profiled("KELLY_FRACTION", "kelly"))
+    max_stake_pct: float = field(default_factory=lambda: _profiled("MAX_STAKE_PCT", "cap"))  # предохранитель
     # Управление банком: просадка от пика -> режим ставок
     dd_caution: float = field(default_factory=lambda: _float("DD_CAUTION", 0.10))  # ×0.5
     dd_defense: float = field(default_factory=lambda: _float("DD_DEFENSE", 0.20))  # ×0.25
     dd_stop: float = field(default_factory=lambda: _float("DD_STOP", 0.30))  # стоп до /resume
     weekly_loss_limit_pct: float = field(default_factory=lambda: _float("WEEKLY_LOSS_LIMIT_PCT", 0.10))
-    max_exposure_pct: float = field(default_factory=lambda: _float("MAX_EXPOSURE_PCT", 0.06))  # всё в игре
-    max_match_pct: float = field(default_factory=lambda: _float("MAX_MATCH_PCT", 0.03))  # на один матч
+    max_exposure_pct: float = field(default_factory=lambda: _profiled("MAX_EXPOSURE_PCT", "exposure"))  # всё в игре
+    max_match_pct: float = field(default_factory=lambda: _profiled("MAX_MATCH_PCT", "match"))  # на один матч
     # сумма бумажного учёта (и потолок совета) для прогнозов босса без перевеса
     paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
     max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 3))

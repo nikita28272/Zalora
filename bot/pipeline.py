@@ -27,13 +27,13 @@ from zoneinfo import ZoneInfo
 from .agents import team
 from .agents.llm import AgentError, AgentRun
 from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
-from .analysis.bankroll import (StakeDecision, decide_stake, edge, flat_stake, min_acceptable_odds,
-                                risk_mode, round_stake)
+from .analysis.bankroll import (StakeDecision, analysis_pct, decide_stake, edge, flat_stake,
+                                min_acceptable_odds, risk_mode, round_stake)
 from .analysis.market import MarketView, market_view
 from .analysis.basketball import NbaModel
 from .analysis.nba_factors import Factors, nba_factors
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
-from .config import LEAGUES_BY_ODDS_KEY, League, settings
+from .config import LEAGUES_BY_ODDS_KEY, RISK_NAMES_RU, League, settings
 from .data import news
 from .data.nba import NbaClient, standings_from_results
 from .data.nba import season_start as nba_season_start
@@ -550,7 +550,8 @@ class Engine:
             f"  сигналов сегодня {st.bets_today} из {settings.max_bets_per_day}, "
             f"результат дня {st.profit_today:+.0f} (лимит убытка {settings.daily_loss_limit_pct:.0%} банка)\n"
             f"  проигрышей подряд {st.losing_streak} (пауза после {settings.stop_after_losses})\n"
-            f"  размер ставки: {settings.kelly_fraction:g} Келли, не больше {settings.max_stake_pct:.0%} банка; "
+            f"  профиль риска: {RISK_NAMES_RU.get(settings.risk_profile, settings.risk_profile)} "
+            f"({settings.kelly_fraction:g} Келли от свободного банка {st.free:.0f}); "
             f"минимальный перевес {settings.min_edge:.0%}, коэффициенты {settings.min_odds}–{settings.max_odds}"
         )
 
@@ -970,8 +971,7 @@ class Engine:
                 # НБА: ставка по силе разбора (уверенность босса), а не по перевесу над линией
                 positive = confidence in ("medium", "high") and in_range
                 if positive:
-                    pct = settings.nba_stake_pct * (1.5 if confidence == "high" else 1.0)
-                    sd = flat_stake(state, settings, pct)
+                    sd = flat_stake(state, settings, analysis_pct(p, confidence, settings))
                     stake, note = (sd.stake, f"по анализу: {sd.reason}") if sd.allowed else (
                         unit, "финансист: " + sd.reason)
                 else:

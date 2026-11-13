@@ -18,7 +18,7 @@ from aiogram.types import (
 )
 
 from ..analysis.bankroll import plan_bet
-from ..config import settings
+from ..config import RISK_NAMES_RU, settings
 from ..db import DB, month_start_utc
 from ..pipeline import AnalysisResult, Engine
 from . import formatting as fmt
@@ -225,7 +225,7 @@ def check_discipline(db: DB, sig, plan, amount: float, advised: float | None = N
     elif amount > 1.5 * rec:
         warn.append(f"сумма {amount:,.0f} больше совета {rec:,.0f}".replace(",", " "))
     if amount > settings.max_stake_pct * st.bankroll:
-        warn.append(f"больше потолка {settings.max_stake_pct:.0%} банка")
+        warn.append(f"больше {settings.max_stake_pct:.0%} банка на одну ставку — это уже очень рискованно")
     db.log_discipline(not warn, f"#{sig.id} {fmt.sig_short(sig)}: " + ", ".join(warn) if warn else "")
     if not warn:
         return ""
@@ -599,7 +599,8 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         st = db.risk_state()
         text = (
             "<b>Лимиты финансиста</b>\n"
-            f"Ставка: {settings.kelly_fraction:g} Келли, не больше {settings.max_stake_pct:.0%} банка\n"
+            f"Профиль риска: {RISK_NAMES_RU.get(settings.risk_profile, settings.risk_profile)} — "
+            f"{settings.kelly_fraction:g} Келли от свободного банка, предохранитель {settings.max_stake_pct:.0%} на ставку\n"
             f"Ставок в день: {st.bets_today} из {settings.max_bets_per_day}\n"
             f"Дневной лимит убытка: {settings.daily_loss_limit_pct:.0%} банка (сегодня {st.profit_today:+,.0f})\n"
             f"Проигрышей подряд: {st.losing_streak} (пауза после {settings.stop_after_losses})\n"

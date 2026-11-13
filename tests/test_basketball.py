@@ -174,7 +174,9 @@ def test_nba_dossier_verdict_and_settlement():
 
     # по анализу: средняя уверенность — фиксированный 1% банка, даже без перевеса над линией
     top = engine.manual_top(num, [("hcp_home", 0.52), ("over", 0.5)], "medium")
-    assert all(p.positive for p in top.picks) and all(p.stake == 100 for p in top.picks)
+    assert all(p.positive for p in top.picks) and all(p.stake > 0 for p in top.picks)
+    by_p = sorted(top.picks, key=lambda p: p.p)
+    assert by_p[0].stake <= by_p[-1].stake  # вероятнее — ставка не меньше
     msg = fmt.top_picks(top, db.bankroll())
     assert "📊 сильный разбор" in msg and "по анализу" in msg
     low = engine.manual_top(num, [("hcp_home", 0.52)], "low")

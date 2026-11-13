@@ -5,7 +5,7 @@ from __future__ import annotations
 from html import escape
 
 from ..agents.schemas import OutcomeView
-from ..config import settings
+from ..config import RISK_NAMES_RU, settings
 from ..db import Signal, Summary, summarize
 from ..data.odds import Quota, ScanReport
 from ..pipeline import AnalysisResult, MatchContext, TopPicks, local
@@ -397,8 +397,9 @@ def finance_status(st, cfg, discipline: tuple[int, int, list[str]] | None = None
         f"💰 Банк: <b>{_money(st.bankroll)}</b> · пик {_money(peak)} · просадка {st.drawdown:.0%}",
         f"Режим финансиста: <b>{escape(mode.label)}</b> — ставки ×{mode.multiplier:g}",
         f"  (просадка {cfg.dd_caution:.0%} → ×0.5, {cfg.dd_defense:.0%} → ×0.25, {cfg.dd_stop:.0%} → стоп)",
-        f"Максимальная ставка сейчас: {_money(st.bankroll * cfg.max_stake_pct * mode.multiplier)} "
-        f"({cfg.max_stake_pct * mode.multiplier:.1%} банка)",
+        f"Свободно для ставок: <b>{_money(st.free)}</b> (банк минус открытые ставки)",
+        f"Профиль риска: <b>{RISK_NAMES_RU.get(cfg.risk_profile, cfg.risk_profile)}</b> — сумма по шансу и цене "
+        f"({cfg.kelly_fraction:g} Келли от свободных денег)",
         f"В игре: {_money(st.in_play)} из {_money(cfg.max_exposure_pct * st.bankroll)} "
         f"(все ставки — до {cfg.max_exposure_pct:.0%}, один матч — до {cfg.max_match_pct:.0%} банка)",
         f"Сегодня: {_money_signed(st.profit_today)} (лимит −{_money(cfg.daily_loss_limit_pct * st.bankroll)}), "
@@ -419,10 +420,11 @@ def finance_status(st, cfg, discipline: tuple[int, int, list[str]] | None = None
 def bet_advice(s: Signal, plan, st) -> str:
     """Шаг 1 после «✅ Сделал»: сколько ставить (по кэфу из досье и текущему банку)."""
     lines = [f"💰 <b>Финансист: {escape(sig_short(s))}</b> ({escape(s.home)} — {escape(s.away)})",
-             f"Банк {_money(st.bankroll)}. Шанс захода (оценка босса) <b>{plan.p:.0%}</b>, "
-             f"кэф в досье {plan.odds:.2f}."]
+             f"Банк {_money(st.bankroll)}" + (f", в открытых ставках {_money(st.in_play)} → свободно "
+                                               f"{_money(st.free)}" if st.in_play else "")
+             + f". Шанс захода (оценка босса) <b>{plan.p:.0%}</b>, кэф в досье {plan.odds:.2f}."]
     if plan.stake > 0:
-        lines += [f"✅ Ставьте <b>{_money(plan.stake)}</b> ({plan.pct:.1%} банка) — {escape(plan.reason)}.",
+        lines += [f"✅ Ставьте <b>{_money(plan.stake)}</b> ({plan.pct:.1%} свободного банка) — {escape(plan.reason)}.",
                   f"Кэф в вашей конторе: в плюс от <b>{1 / plan.p:.2f}</b>, с запасом 3% — от {plan.need_odds:.2f}.",
                   "Нажмите «✅ Поставил», потом напишите кэф — разберу ставку и дам прогноз по банку."]
     else:
@@ -474,7 +476,7 @@ def bet_plan(s: Signal, plan, bank: float) -> str:
     ]
     if plan.stake > 0:
         lines += [
-            f"✅ Рекомендую: <b>{_money(plan.stake)}</b> ({plan.pct:.1%} банка) — {escape(plan.reason)}.",
+            f"✅ Рекомендую: <b>{_money(plan.stake)}</b> ({plan.pct:.1%} свободного банка) — {escape(plan.reason)}.",
             f"Зайдёт: +{_money(plan.win)} → банк {_money(bank + plan.win)}. "
             f"Не зайдёт: −{_money(plan.stake)} → банк {_money(bank - plan.stake)}.",
             f"В среднем на дистанции такая ставка даёт {plan.stake * plan.ev:+,.0f}.".replace(",", " "),

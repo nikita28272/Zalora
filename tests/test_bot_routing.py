@@ -291,7 +291,7 @@ def test_financier_plan_from_owner_odds():
     good = plan_bet(0.56, 2.10, state, st)
     assert good.stake > 0 and good.pct <= st.max_stake_pct and good.win == round(good.stake * 1.1, 2)
     nba = plan_bet(0.6, 1.80, state, st, by_analysis=True, confidence="high")
-    assert nba.stake == 150 and "высокая" in nba.reason
+    assert nba.stake == 300 and "высокая" in nba.reason  # 1.5% × 1.5 (high) × 1.33 (шанс 60%)
     nba_low = plan_bet(0.6, 1.80, state, st, by_analysis=True, confidence="low")
     assert nba_low.stake == 0 and nba_low.verdict == "на свой риск"
     blocked = plan_bet(0.6, 2.2, RiskState(10000, 0, 0, 9), st)
@@ -307,7 +307,7 @@ def test_financier_own_amount_with_warning():
     asyncio.run(dp.feed_update(bot, _msg("1500")))
     sig = db.signal(sid)
     assert sig.placed and sig.actual_stake == 1500 and sig.actual_odds == 2.1
-    assert "больше совета" in _texts(session)[-1] and "потолка" in _texts(session)[-1]
+    assert "больше совета" in _texts(session)[-1] and "очень рискованно" in _texts(session)[-1]
     ok, bad, notes = db.discipline()
     assert bad == 1 and "П1" in notes[-1]
     asyncio.run(dp.feed_update(bot, _msg(handlers.BTN_BANK)))

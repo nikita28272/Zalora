@@ -431,17 +431,22 @@ def test_drawdown_modes_and_exposure():
 
     full = plan_bet(0.6, 2.2, normal, cfg)
     half = plan_bet(0.6, 2.2, caution, cfg)
-    assert half.pct == full.pct / 2 and half.stake == 88 and "×0.5" in half.reason
+    assert full.pct == cfg.max_stake_pct and "предохранитель" in full.reason  # сильный перевес — упёрлись
+    assert half.pct == full.pct / 2 and half.stake == 220 and "×0.5" in half.reason
 
     week = RiskState(10000, 0, 0, 0, peak=10000, week_profit=-1000)
     assert "недельный" in risk_block(week, cfg)
 
-    busy = RiskState(10000, 0, 0, 0, peak=10000, in_play=500)  # в игре 5% из 6%
+    # открытые ставки уменьшают свободный банк и лимит «в игре»
+    free = plan_bet(0.55, 2.0, RiskState(10000, 0, 0, 0, peak=10000, in_play=2000), cfg)
+    base = plan_bet(0.55, 2.0, normal, cfg)
+    assert free.stake < base.stake
+    busy = RiskState(10000, 0, 0, 0, peak=10000, in_play=1100)  # в игре 11% из 12%
     capped = plan_bet(0.6, 2.2, busy, cfg)
-    assert capped.stake == 100 and "в игре" in capped.reason
-    same_match = plan_bet(0.6, 2.2, normal, cfg, match_in_play=200)  # на матч уже 2% из 3%
-    assert same_match.stake == 100 and "один матч" in same_match.reason
-    assert "лимит одновременных" in risk_block(RiskState(10000, 0, 0, 0, in_play=600), cfg)
+    assert capped.stake <= 100 and "в игре" in capped.reason
+    same_match = plan_bet(0.6, 2.2, normal, cfg, match_in_play=500)  # на матч уже 5% из 6%
+    assert same_match.stake <= 100 and "один матч" in same_match.reason
+    assert "лимит одновременных" in risk_block(RiskState(10000, 0, 0, 0, in_play=1200), cfg)
 
 
 def test_peak_tracking_and_resume_baseline():
