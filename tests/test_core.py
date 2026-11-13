@@ -392,3 +392,23 @@ def test_model_far_from_market_is_not_a_candidate():
     ctx = MatchContext(1, ev, mv, far)
     assert ctx.quant_candidates() == []
     assert ctx.model_gap("away") > 0.12
+
+
+def test_tighter_filter_drops_outlier_prices_and_regulation_totals():
+    from bot.analysis.market import clean_books, usable_prices
+
+    # одиночный «щедрый» кэф 3.15 при обычных 2.80–2.90 не попадает ни в лучший, ни в средний
+    assert usable_prices([2.85, 2.80, 2.90, 2.86, 3.15]) == [2.85, 2.80, 2.90, 2.86]
+    assert usable_prices([2.0, 3.0]) == [2.0, 3.0]  # мало данных — не трогаем
+
+    # тотал без учёта овертайма (больше ~2.25 / меньше ~1.62) выбивается из рынка тотала с ОТ
+    def tot(name, over, under):
+        b = BookOdds(name)
+        b.put("over", over, 6.5)
+        b.put("under", under, 6.5)
+        return b
+
+    books = [tot("pinnacle", 2.02, 1.85), tot("a", 2.00, 1.83), tot("b", 2.05, 1.80), tot("c", 2.03, 1.82),
+             tot("reg_only", 2.25, 1.62)]
+    kept = {b.bookmaker for b in clean_books(books, ("over", "under"), {"over": 6.5, "under": 6.5})}
+    assert kept == {"pinnacle", "a", "b", "c"}

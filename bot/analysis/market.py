@@ -23,7 +23,13 @@ NHL_REG_DRAW = 0.23
 # Отсев испорченных котировок. Честная линия всегда с маржой: сумма 1/кэф ≥ 1.
 # Меньше — значит букмекер отдал под этим рынком другой (например, основное время вместо «с ОТ»).
 MAX_BOOK_MARGIN = 0.25  # шире — подозрительно (ошибка данных или экзотическая линия)
-MAX_DEVIATION = 0.10  # котировка, которая расходится с медианой рынка больше чем на 10 п.п., — выброс
+# Котировка букмекера, которая после снятия маржи расходится с медианой рынка больше чем на столько, — выброс
+# (например, тотал без учёта овертайма, выданный за обычный). Для рынков на 2 исхода порог строже.
+MAX_DEVIATION_2WAY = 0.05  # честные букмекеры на 2-исходных рынках расходятся на 2–3 п.п.
+MAX_DEVIATION_3WAY = 0.08
+# Отдельный коэффициент выше медианы больше чем на 7% не идёт ни в средний, ни в лучший кэф:
+# одиночные «щедрые» цены обычно ошибка, устаревшая линия или акция с ограничениями.
+MAX_PRICE_ABOVE_MEDIAN = 0.07
 ESTIMATED_MARGIN = 0.07  # типичная маржа букмекера на 1X2 в хоккее — для оценочного кэфа
 
 
@@ -100,7 +106,16 @@ def clean_books(books: list[BookOdds], group: tuple[str, ...], pts: dict) -> lis
         return sane
     per_book = {id(b): devig([b.price(s, pts[s]) for s in group]) for b in sane}
     med = [median(p[i] for p in per_book.values()) for i in range(len(group))]
-    return [b for b in sane if max(abs(per_book[id(b)][i] - med[i]) for i in range(len(group))) <= MAX_DEVIATION]
+    limit = MAX_DEVIATION_2WAY if len(group) == 2 else MAX_DEVIATION_3WAY
+    return [b for b in sane if max(abs(per_book[id(b)][i] - med[i]) for i in range(len(group))) <= limit]
+
+
+def usable_prices(prices: list[float]) -> list[float]:
+    """Цены без одиночных выбросов вверх (больше медианы на MAX_PRICE_ABOVE_MEDIAN)."""
+    if len(prices) < 3:
+        return prices
+    cap = median(prices) * (1 + MAX_PRICE_ABOVE_MEDIAN)
+    return [p for p in prices if p <= cap]
 
 
 def market_view(event: Event) -> MarketView | None:
@@ -137,7 +152,7 @@ def market_view(event: Event) -> MarketView | None:
             group_source = "consensus"
         fair.update(zip(group, probs))
         for s in group:
-            prices = [b.price(s, pts[s]) for b in books]
+            prices = usable_prices([b.price(s, pts[s]) for b in books])
             avg_odds[s] = round(mean(prices), 3)
             best_odds[s] = max(prices)
         if gi == 0:
