@@ -28,7 +28,7 @@ from .agents import team
 from .agents.llm import AgentError, AgentRun
 from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
 from .analysis.bankroll import (StakeDecision, decide_stake, edge, flat_stake, min_acceptable_odds,
-                                round_stake)
+                                risk_mode, round_stake)
 from .analysis.market import MarketView, market_view
 from .analysis.basketball import NbaModel
 from .analysis.nba_factors import Factors, nba_factors
@@ -539,9 +539,14 @@ class Engine:
     def finance_report(self) -> str:
         st = self.db.risk_state()
         n_play, s_play = self.db.in_play()
+        mode = risk_mode(st, settings)
         return (
             "ДОКЛАД ФИНАНСИСТА:\n"
-            f"  банк {st.bankroll:.0f}, в игре {n_play} ставок на {s_play:.0f}\n"
+            f"  банк {st.bankroll:.0f} (пик {max(st.peak, st.bankroll):.0f}, просадка {st.drawdown:.0%}), "
+            f"в игре {n_play} ставок на {s_play:.0f}\n"
+            f"  режим: {mode.label}, ставки ×{mode.multiplier:g}"
+            + (f" — СТАВКИ ОСТАНОВЛЕНЫ: {mode.stop}" if mode.stop else "") + "\n"
+            f"  неделя {st.week_profit:+.0f} (лимит убытка {settings.weekly_loss_limit_pct:.0%} банка)\n"
             f"  сигналов сегодня {st.bets_today} из {settings.max_bets_per_day}, "
             f"результат дня {st.profit_today:+.0f} (лимит убытка {settings.daily_loss_limit_pct:.0%} банка)\n"
             f"  проигрышей подряд {st.losing_streak} (пауза после {settings.stop_after_losses})\n"

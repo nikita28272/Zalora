@@ -412,3 +412,48 @@ def test_tighter_filter_drops_outlier_prices_and_regulation_totals():
              tot("reg_only", 2.25, 1.62)]
     kept = {b.bookmaker for b in clean_books(books, ("over", "under"), {"over": 6.5, "under": 6.5})}
     assert kept == {"pinnacle", "a", "b", "c"}
+
+
+
+def test_drawdown_modes_and_exposure():
+    from bot.analysis.bankroll import RiskState, decide_stake, plan_bet, risk_block, risk_mode
+    from bot.config import settings as cfg
+
+    normal = RiskState(10000, 0, 0, 0, peak=10000)
+    assert risk_mode(normal, cfg).multiplier == 1
+    caution = RiskState(8800, 0, 0, 0, peak=10000)  # −12%
+    assert risk_mode(caution, cfg).multiplier == 0.5 and "осторожный" in risk_mode(caution, cfg).label
+    defense = RiskState(7500, 0, 0, 2, peak=10000)  # −25% и 2 проигрыша подряд
+    assert risk_mode(defense, cfg).multiplier == 0.25 * 0.75
+    stop = RiskState(6900, 0, 0, 0, peak=10000)  # −31%
+    assert risk_mode(stop, cfg).stop and "просел" in risk_block(stop, cfg)
+    assert not decide_stake(0.6, 2.2, stop, cfg).allowed
+
+    full = plan_bet(0.6, 2.2, normal, cfg)
+    half = plan_bet(0.6, 2.2, caution, cfg)
+    assert half.pct == full.pct / 2 and half.stake == 88 and "×0.5" in half.reason
+
+    week = RiskState(10000, 0, 0, 0, peak=10000, week_profit=-1000)
+    assert "недельный" in risk_block(week, cfg)
+
+    busy = RiskState(10000, 0, 0, 0, peak=10000, in_play=500)  # в игре 5% из 6%
+    capped = plan_bet(0.6, 2.2, busy, cfg)
+    assert capped.stake == 100 and "в игре" in capped.reason
+    same_match = plan_bet(0.6, 2.2, normal, cfg, match_in_play=200)  # на матч уже 2% из 3%
+    assert same_match.stake == 100 and "один матч" in same_match.reason
+    assert "лимит одновременных" in risk_block(RiskState(10000, 0, 0, 0, in_play=600), cfg)
+
+
+def test_peak_tracking_and_resume_baseline():
+    from bot.db import DB
+
+    db = DB(":memory:")
+    db.set_bankroll(10000)
+    assert db.bank_peak() == 10000
+    db.set("bankroll", 11000)
+    assert db.bank_peak() == 11000  # новый максимум
+    db.set("bankroll", 7000)
+    st = db.risk_state()
+    assert st.peak == 11000 and round(st.drawdown, 2) == 0.36
+    db.reset_peak()
+    assert db.risk_state().drawdown == 0

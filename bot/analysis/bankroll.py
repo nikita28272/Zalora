@@ -39,6 +39,40 @@ class RiskState:
     bets_today: int
     profit_today: float
     losing_streak: int
+    peak: float = 0.0  # максимум банка (0 — считать равным текущему)
+    week_profit: float = 0.0  # результат ваших ставок за неделю
+    in_play: float = 0.0  # сумма открытых ставок
+
+    @property
+    def drawdown(self) -> float:
+        peak = max(self.peak, self.bankroll)
+        return (peak - self.bankroll) / peak if peak > 0 else 0.0
+
+
+@dataclass
+class RiskMode:
+    multiplier: float  # во сколько раз уменьшить ставку
+    label: str  # «✅ обычный», «⚠️ осторожный» …
+    stop: str | None  # причина остановки ставок
+
+
+def risk_mode(state: RiskState, cfg: Settings) -> RiskMode:
+    """Режим финансиста по просадке от пика банка и серии проигрышей."""
+    dd = state.drawdown
+    if dd >= cfg.dd_stop:
+        return RiskMode(0.0, f"⛔ стоп (просадка {dd:.0%})",
+                        f"банк просел на {dd:.0%} от пика — ставки остановлены. Разберите статистику; "
+                        "продолжить с новой точкой отсчёта: /resume")
+    if dd >= cfg.dd_defense:
+        mult, label = 0.25, f"🛡 защита (просадка {dd:.0%})"
+    elif dd >= cfg.dd_caution:
+        mult, label = 0.5, f"⚠️ осторожный (просадка {dd:.0%})"
+    else:
+        mult, label = 1.0, "✅ обычный" + (f" (просадка {dd:.0%})" if dd >= 0.01 else "")
+    if state.losing_streak >= 2:
+        mult *= 0.75
+        label += f", {state.losing_streak} проигрыша подряд"
+    return RiskMode(mult, label, None)
 
 
 @dataclass
@@ -68,7 +102,35 @@ def risk_block(state: RiskState, cfg: Settings) -> str | None:
     if cfg.stop_after_losses and state.losing_streak >= cfg.stop_after_losses:
         return (f"{state.losing_streak} проигрышей подряд. Новые сигналы на паузе: сделайте перерыв "
                 "и посмотрите /stats. Снять паузу: /resume.")
+    if state.week_profit <= -cfg.weekly_loss_limit_pct * state.bankroll:
+        return (f"недельный лимит убытка {cfg.weekly_loss_limit_pct:.0%} банка достигнут "
+                f"({state.week_profit:+,.0f}). До понедельника ставок нет; снять: /resume.".replace(",", " "))
+    mode = risk_mode(state, cfg)
+    if mode.stop:
+        return mode.stop
+    if state.in_play >= cfg.max_exposure_pct * state.bankroll:
+        return (f"в игре уже {state.in_play:,.0f} — это лимит одновременных ставок "
+                f"({cfg.max_exposure_pct:.0%} банка). Дождитесь расчёта.".replace(",", " "))
     return None
+
+
+def _scaled(state: RiskState, cfg: Settings, pct: float, match_in_play: float = 0.0) -> tuple[float, list[str]]:
+    """Доля банка с учётом режима и лимитов денег в игре (всего и на один матч)."""
+    notes = []
+    mode = risk_mode(state, cfg)
+    if mode.multiplier < 1:
+        notes.append(f"режим {mode.label}: ставка ×{mode.multiplier:g}")
+    pct *= mode.multiplier
+    bank = state.bankroll
+    room = cfg.max_exposure_pct * bank - state.in_play
+    if bank > 0 and pct * bank > room:
+        pct = max(room, 0) / bank
+        notes.append(f"урезал: всего в игре не больше {cfg.max_exposure_pct:.0%} банка")
+    match_room = cfg.max_match_pct * bank - match_in_play
+    if bank > 0 and pct * bank > match_room:
+        pct = max(match_room, 0) / bank
+        notes.append(f"урезал: на один матч не больше {cfg.max_match_pct:.0%} банка")
+    return pct, notes
 
 
 def flat_stake(state: RiskState, cfg: Settings, pct: float) -> StakeDecision:
@@ -76,11 +138,11 @@ def flat_stake(state: RiskState, cfg: Settings, pct: float) -> StakeDecision:
     block = risk_block(state, cfg)
     if block:
         return StakeDecision(False, 0, 0, block)
-    pct = min(pct, cfg.max_stake_pct)
+    pct, notes = _scaled(state, cfg, min(pct, cfg.max_stake_pct))
     stake = round_stake(state.bankroll * pct)
     if stake <= 0:
         return StakeDecision(False, 0, 0, "Ставка получается слишком маленькой.")
-    return StakeDecision(True, stake, pct, f"фиксированно {pct:.1%} банка")
+    return StakeDecision(True, stake, pct, f"фиксированно {pct:.1%} банка" + "".join("; " + n for n in notes))
 
 
 def decide_stake(p: float, odds: float, state: RiskState, cfg: Settings) -> StakeDecision:
@@ -91,11 +153,12 @@ def decide_stake(p: float, odds: float, state: RiskState, cfg: Settings) -> Stak
     k = kelly(p, odds)
     if k <= 0:
         return StakeDecision(False, 0, 0, "Нет математического перевеса.")
-    pct = min(k * cfg.kelly_fraction, cfg.max_stake_pct)
+    pct, notes = _scaled(state, cfg, min(k * cfg.kelly_fraction, cfg.max_stake_pct))
     stake = round_stake(state.bankroll * pct)
     if stake <= 0:
         return StakeDecision(False, 0, 0, "Ставка получается слишком маленькой.")
-    return StakeDecision(True, stake, pct, f"{cfg.kelly_fraction:g} Келли, потолок {cfg.max_stake_pct:.0%} банка")
+    return StakeDecision(True, stake, pct, f"{cfg.kelly_fraction:g} Келли, потолок {cfg.max_stake_pct:.0%} банка"
+                         + "".join("; " + n for n in notes))
 
 
 @dataclass
@@ -117,7 +180,7 @@ class BetPlan:
 
 
 def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
-             by_analysis: bool = False, confidence: str = "medium") -> BetPlan:
+             by_analysis: bool = False, confidence: str = "medium", match_in_play: float = 0.0) -> BetPlan:
     """Сколько ставить по кэфу владельца.
 
     Обычный режим: 1/4 Келли от перевеса при ВАШЕМ кэфе, не больше MAX_STAKE_PCT; перевес меньше
@@ -126,7 +189,7 @@ def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
     """
     ev = edge(p, odds)
     need = min_acceptable_odds(p, cfg.min_edge)
-    own = round_stake(state.bankroll * cfg.paper_stake_pct)
+    own = round_stake(state.bankroll * cfg.paper_stake_pct * risk_mode(state, cfg).multiplier)
     block = risk_block(state, cfg)
     if block:
         return BetPlan(p, odds, ev, 0, 0, "не ставить", block, need, 0)
@@ -139,6 +202,8 @@ def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
         if ev < 0:
             pct /= 2  # по нашей же оценке кэф мал — половина обычной ставки
             reason += f"; кэф ниже нашей оценки (в плюс от {1 / p:.2f}) — ставку режу вдвое"
+        pct, notes = _scaled(state, cfg, pct, match_in_play)
+        reason += "".join("; " + n for n in notes)
         stake = round_stake(state.bankroll * pct)
         return BetPlan(p, odds, ev, stake, pct, "ставить" if stake > 0 else "не ставить", reason, need, own)
     if ev < cfg.min_edge:
@@ -149,9 +214,10 @@ def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
         return BetPlan(p, odds, ev, 0, 0, "не ставить",
                        f"кэф вне рабочего диапазона {cfg.min_odds}–{cfg.max_odds}", need, own)
     k = kelly(p, odds)
-    pct = min(k * cfg.kelly_fraction, cfg.max_stake_pct)
+    base = min(k * cfg.kelly_fraction, cfg.max_stake_pct)
+    capped = " (упёрлись в потолок)" if base >= cfg.max_stake_pct else ""
+    pct, notes = _scaled(state, cfg, base, match_in_play)
     stake = round_stake(state.bankroll * pct)
-    capped = " (упёрлись в потолок)" if pct >= cfg.max_stake_pct else ""
     return BetPlan(p, odds, ev, stake, pct, "ставить" if stake > 0 else "не ставить",
                    f"{cfg.kelly_fraction:g} Келли от перевеса {ev:+.1%}, потолок {cfg.max_stake_pct:.0%} банка"
-                   + capped, need, own)
+                   + capped + "".join("; " + n for n in notes), need, own)

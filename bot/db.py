@@ -263,8 +263,38 @@ class DB:
 
     def set_bankroll(self, value: float) -> None:
         self.set("bankroll", round(value, 2))
-        # ручная правка банка — новая точка отсчёта для месячной статистики
+        # ручная правка банка (пополнение, вывод) — новая точка отсчёта для статистики и просадки
         self.set("bank_reset_at", _now().isoformat())
+        self.set("bank_peak", round(value, 2))
+
+    def bank_peak(self) -> float:
+        """Максимум банка с последней ручной правки (для расчёта просадки)."""
+        bank = self.bankroll()
+        peak = float(self.get("bank_peak", bank))
+        if bank > peak:
+            self.set("bank_peak", round(bank, 2))
+            peak = bank
+        return peak
+
+    def reset_peak(self) -> None:
+        self.set("bank_peak", round(self.bankroll(), 2))
+
+    def match_in_play(self, event_id: str, exclude_id: int | None = None) -> float:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(actual_stake), 0) FROM signals WHERE event_id = ? AND user_decision = 'placed' "
+            "AND status = 'pending' AND id != ?", (event_id, exclude_id or -1)).fetchone()
+        return float(row[0])
+
+    # ---------- дисциплина: следует ли владелец советам финансиста ----------
+    def log_discipline(self, followed: bool, note: str = "") -> None:
+        key = "disc_ok" if followed else "disc_bad"
+        self.set(key, int(self.get(key, 0)) + 1)
+        if not followed and note:
+            last = list(self.get("disc_notes", []))[-4:]
+            self.set("disc_notes", last + [f"{datetime.now(_tz()):%d.%m} {note}"])
+
+    def discipline(self) -> tuple[int, int, list[str]]:
+        return int(self.get("disc_ok", 0)), int(self.get("disc_bad", 0)), list(self.get("disc_notes", []))
 
     def in_play(self) -> tuple[int, float]:
         """Сколько поставленных ставок ещё не рассчитано и на какую сумму."""
@@ -297,10 +327,23 @@ class DB:
                 streak += 1
             else:
                 break
-        return RiskState(self.bankroll(), bets_today, float(profit_today), streak)
+        # неделя — с понедельника по местному времени (или с последнего /resume)
+        now_local = datetime.now(_tz())
+        week_start = (now_local - timedelta(days=now_local.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc).isoformat()
+        week_start = max(week_start, self.get("week_reset_at", ""))
+        week_profit = self.conn.execute(
+            "SELECT COALESCE(SUM(profit), 0) FROM signals WHERE user_decision = 'placed' AND settled_at >= ?",
+            (week_start,),
+        ).fetchone()[0]
+        return RiskState(self.bankroll(), bets_today, float(profit_today), streak,
+                         peak=self.bank_peak(), week_profit=float(week_profit), in_play=self.in_play()[1])
 
     def reset_streak(self) -> None:
         self.set("streak_reset_at", _now().isoformat())
+
+    def reset_week(self) -> None:
+        self.set("week_reset_at", _now().isoformat())
 
     # ---------- сигналы ----------
     def add_signal(self, **fields) -> int | None:
@@ -404,6 +447,7 @@ class DB:
         self.conn.commit()
         if profit:
             self.set("bankroll", round(self.bankroll() + profit, 2))
+            self.bank_peak()  # новый максимум запоминается сразу
 
     # ---------- расход LLM ----------
     def analyses_today(self) -> int:

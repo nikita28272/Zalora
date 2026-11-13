@@ -295,7 +295,11 @@ def test_financier_own_amount_with_warning():
     asyncio.run(dp.feed_update(bot, _msg("1500")))
     sig = db.signal(sid)
     assert sig.placed and sig.actual_stake == 1500 and sig.actual_odds == 2.1
-    assert "больше рекомендованной" in _texts(session)[-1]
+    assert "больше совета" in _texts(session)[-1] and "потолка" in _texts(session)[-1]
+    ok, bad, notes = db.discipline()
+    assert bad == 1 and "П1" in notes[-1]
+    asyncio.run(dp.feed_update(bot, _msg(handlers.BTN_BANK)))
+    assert "Дисциплина: 0 из 1" in _texts(session)[-1] and "Режим финансиста" in _texts(session)[-1]
 
 
 

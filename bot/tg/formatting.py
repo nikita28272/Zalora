@@ -92,6 +92,10 @@ def _pct(x: float | None) -> str:
     return "—" if x is None else f"{x:.0%}"
 
 
+def _money_signed(x: float) -> str:
+    return f"{x:+,.0f}".replace(",", " ")
+
+
 def _money(x: float) -> str:
     return f"{x:,.0f}".replace(",", " ")
 
@@ -377,6 +381,39 @@ def placed_confirmation(s: Signal, bank: float, in_play: tuple[int, float]) -> s
         f"{_money(s.actual_stake or 0)} по {s.actual_odds:.2f}.\n"
         f"Банк: {_money(bank)}. В игре: {in_play[0]} ставок на {_money(in_play[1])}.{warn}"
     )
+
+
+def finance_status(st, cfg, discipline: tuple[int, int, list[str]] | None = None, short: bool = False) -> str:
+    """Состояние банка глазами финансиста: пик, просадка, режим, лимиты, дисциплина."""
+    from ..analysis.bankroll import risk_block, risk_mode
+
+    mode = risk_mode(st, cfg)
+    peak = max(st.peak, st.bankroll)
+    if short:
+        return (f"💰 Банк {_money(st.bankroll)} (пик {_money(peak)}), режим {mode.label}, ставки ×{mode.multiplier:g}"
+                if mode.multiplier > 0 else f"💰 Банк {_money(st.bankroll)} — {mode.label}: ставки остановлены")
+    block = risk_block(st, cfg)
+    lines = [
+        f"💰 Банк: <b>{_money(st.bankroll)}</b> · пик {_money(peak)} · просадка {st.drawdown:.0%}",
+        f"Режим финансиста: <b>{escape(mode.label)}</b> — ставки ×{mode.multiplier:g}",
+        f"  (просадка {cfg.dd_caution:.0%} → ×0.5, {cfg.dd_defense:.0%} → ×0.25, {cfg.dd_stop:.0%} → стоп)",
+        f"Максимальная ставка сейчас: {_money(st.bankroll * cfg.max_stake_pct * mode.multiplier)} "
+        f"({cfg.max_stake_pct * mode.multiplier:.1%} банка)",
+        f"В игре: {_money(st.in_play)} из {_money(cfg.max_exposure_pct * st.bankroll)} "
+        f"(все ставки — до {cfg.max_exposure_pct:.0%}, один матч — до {cfg.max_match_pct:.0%} банка)",
+        f"Сегодня: {_money_signed(st.profit_today)} (лимит −{_money(cfg.daily_loss_limit_pct * st.bankroll)}), "
+        f"неделя: {_money_signed(st.week_profit)} (лимит −{_money(cfg.weekly_loss_limit_pct * st.bankroll)})",
+        f"Ставок сегодня: {st.bets_today} из {cfg.max_bets_per_day}; проигрышей подряд: {st.losing_streak}",
+    ]
+    if block:
+        lines.append(f"⛔ Сейчас ставить нельзя: {escape(block)}")
+    if discipline:
+        ok, bad, notes = discipline
+        if ok + bad:
+            lines.append(f"Дисциплина: {ok} из {ok + bad} ставок по совету финансиста")
+            for n in notes[-3:]:
+                lines.append(f"  ⚠️ {escape(n)}")
+    return "\n".join(lines)
 
 
 def bet_plan(s: Signal, plan, bank: float) -> str:

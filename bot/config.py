@@ -152,6 +152,13 @@ class Settings:
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))
     kelly_fraction: float = field(default_factory=lambda: _float("KELLY_FRACTION", 0.25))
     max_stake_pct: float = field(default_factory=lambda: _float("MAX_STAKE_PCT", 0.02))
+    # Управление банком: просадка от пика -> режим ставок
+    dd_caution: float = field(default_factory=lambda: _float("DD_CAUTION", 0.10))  # ×0.5
+    dd_defense: float = field(default_factory=lambda: _float("DD_DEFENSE", 0.20))  # ×0.25
+    dd_stop: float = field(default_factory=lambda: _float("DD_STOP", 0.30))  # стоп до /resume
+    weekly_loss_limit_pct: float = field(default_factory=lambda: _float("WEEKLY_LOSS_LIMIT_PCT", 0.10))
+    max_exposure_pct: float = field(default_factory=lambda: _float("MAX_EXPOSURE_PCT", 0.06))  # всё в игре
+    max_match_pct: float = field(default_factory=lambda: _float("MAX_MATCH_PCT", 0.03))  # на один матч
     # сумма бумажного учёта (и потолок совета) для прогнозов босса без перевеса
     paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
     max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 3))

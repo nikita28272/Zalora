@@ -182,7 +182,27 @@ def plan_keyboard(signal_id: int, odds: float, stake: float) -> InlineKeyboardMa
 def signal_plan(db: DB, sig, odds: float):
     """Разбор финансиста для сигнала по кэфу владельца (от текущего банка и лимитов)."""
     by_analysis = sig.sport == "basketball" and settings.nba_mode == "analysis" and sig.source == "boss"
-    return plan_bet(sig.p_final, odds, db.risk_state(), settings, by_analysis, sig.confidence)
+    return plan_bet(sig.p_final, odds, db.risk_state(), settings, by_analysis, sig.confidence,
+                    match_in_play=db.match_in_play(sig.event_id, exclude_id=sig.id))
+
+
+def check_discipline(db: DB, sig, plan, amount: float) -> str:
+    """Записывает, следует ли владелец совету, и возвращает предупреждение финансиста (или пусто)."""
+    st = db.risk_state()
+    warn = []
+    if plan.stake <= 0:
+        warn.append("финансист советовал не ставить")
+    elif amount > 1.5 * plan.stake:
+        warn.append(f"сумма {amount:,.0f} больше совета {plan.stake:,.0f}".replace(",", " "))
+    if amount > settings.max_stake_pct * st.bankroll:
+        warn.append(f"больше потолка {settings.max_stake_pct:.0%} банка")
+    db.log_discipline(not warn, f"#{sig.id} {fmt.sig_short(sig)}: " + ", ".join(warn) if warn else "")
+    if not warn:
+        return ""
+    text = "\n⚠️ Финансист: " + "; ".join(warn) + "."
+    if st.losing_streak >= 2:
+        text += " После проигрышей не отыгрывайтесь — это главный путь к потере банка."
+    return text
 
 
 def late_check_keyboard(num: int) -> InlineKeyboardMarkup:
@@ -267,7 +287,8 @@ async def send_daily(bot: Bot, chat_id: int, engine: Engine, matches, title: str
     extra = fmt.schedule_only_block(engine.last_report)
     if extra:
         text += "\n\n" + extra
-    text += "\n\n" + fmt.odds_footer(engine.last_report, engine.quota())
+    text += "\n\n" + fmt.finance_status(engine.db.risk_state(), settings, short=True)
+    text += "\n" + fmt.odds_footer(engine.last_report, engine.quota())
     await send_long(bot, chat_id, text, daily_keyboard(picks, len(matches), engine.last_report))
 
 
@@ -540,14 +561,8 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await show_bank(message)
 
     async def show_bank(message: Message) -> None:
-        n_play, s_play = db.in_play()
-        await message.answer(
-            f"💰 Банк: <b>{db.bankroll():,.0f}</b>\n"
-            f"Максимальная ставка: {settings.max_stake_pct:.0%} банка = {db.bankroll() * settings.max_stake_pct:,.0f}\n"
-            f"В игре: {n_play} ставок на {s_play:,.0f}"
-            .replace(",", " "),
-            reply_markup=bank_keyboard(),
-        )
+        await message.answer(fmt.finance_status(db.risk_state(), settings, db.discipline()),
+                             reply_markup=bank_keyboard())
 
     @owner.message(Command("limits"))
     async def cmd_limits(message: Message) -> None:
@@ -568,8 +583,17 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("resume"))
     async def cmd_resume(message: Message) -> None:
+        from ..analysis.bankroll import risk_mode
+
+        st = db.risk_state()
         db.reset_streak()
-        await message.answer("Пауза снята. Серия проигрышей обнулена.")
+        db.reset_week()
+        text = "Пауза снята: серия проигрышей и недельный счёт обнулены."
+        if risk_mode(st, settings).stop:
+            db.reset_peak()
+            text += (f"\n💰 Финансист: банк {st.bankroll:,.0f} — новая точка отсчёта просадки. "
+                     "Начинаем осторожно: если снова просядем, режим защиты включится раньше.").replace(",", " ")
+        await message.answer(text)
 
     @owner.message(Command("usage"))
     async def cmd_usage(message: Message) -> None:
@@ -799,6 +823,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
                                     "Напишите число, например 300.")
             return
         stake = float(parts[4])
+        db.log_discipline(True)
         db.decide(sid, placed=True, odds=odds, stake=stake)
         try:
             await cb.message.edit_reply_markup(reply_markup=None)
@@ -874,13 +899,9 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
                 await message.answer("Матч уже начался: работаем только в прематче, отметку не принимаю.")
                 return
             plan = signal_plan(db, sig, float(own["odds"]))
+            warn = check_discipline(db, sig, plan, amount)
             db.decide(sig.id, placed=True, odds=float(own["odds"]), stake=amount)
-            text = fmt.placed_confirmation(db.signal(sig.id), db.bankroll(), db.in_play())
-            limit = max(plan.stake, plan.max_own)
-            if amount > settings.max_stake_pct * db.bankroll() or (limit and amount > 2 * limit):
-                text += (f"\n⚠️ Финансист: сумма заметно больше рекомендованной ({limit:,.0f}). "
-                         "Крупные ставки быстро съедают банк при неудачной серии.").replace(",", " ")
-            await message.answer(text)
+            await message.answer(fmt.placed_confirmation(db.signal(sig.id), db.bankroll(), db.in_play()) + warn)
             return
         sid = db.get("awaiting_bet")
         if not sid:
@@ -905,8 +926,9 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await message.answer(fmt.bet_plan(sig, plan, db.bankroll()),
                                  reply_markup=plan_keyboard(sig.id, odds, plan.stake))
             return
+        warn = check_discipline(db, sig, signal_plan(db, sig, odds), stake)
         db.decide(sig.id, placed=True, odds=odds, stake=stake)
-        await message.answer(fmt.placed_confirmation(db.signal(sig.id), db.bankroll(), db.in_play()))
+        await message.answer(fmt.placed_confirmation(db.signal(sig.id), db.bankroll(), db.in_play()) + warn)
 
     # Всем остальным: подсказка, как стать владельцем.
     public = Router(name="public")
@@ -949,6 +971,9 @@ async def run_scan(bot: Bot, engine: Engine, chat_id: int, verbose: bool = False
 
 
 async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bool = False) -> None:
+    from ..analysis.bankroll import risk_mode
+
+    before = risk_mode(db.risk_state(), settings)
     try:
         settled = await engine.settle()
     except Exception as exc:  # noqa: BLE001
@@ -959,7 +984,15 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
         if verbose:
             await bot.send_message(chat_id, "Нет завершённых матчей для расчёта.")
         return
-    await send_long(bot, chat_id, fmt.settle_report(settled, db.bankroll()))
+    st = db.risk_state()
+    after = risk_mode(st, settings)
+    text = fmt.settle_report(settled, db.bankroll()) + "\n\n" + fmt.finance_status(st, settings, short=True)
+    if after.multiplier != before.multiplier:
+        worse = after.multiplier < before.multiplier
+        text += ("\n" + ("⚠️" if worse else "✅") + f" Финансист: режим меняется на «{fmt.escape(after.label)}» — "
+                 + ("ставки остановлены." if after.multiplier == 0 else f"ставки ×{after.multiplier:g}.")
+                 + (" Не отыгрывайтесь: размер ставок сам вернётся, когда банк восстановится." if worse else ""))
+    await send_long(bot, chat_id, text)
 
 
 async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
