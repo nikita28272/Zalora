@@ -102,7 +102,7 @@ class NhlClient:
         today = datetime.now(timezone.utc).date()
         while day <= end:
             # прошлые недели не меняются — кешируем надолго, текущую — на 10 минут
-            ttl = 600 if day + timedelta(days=7) >= today else 24 * 3600
+            ttl = 600 if day + timedelta(days=7) >= today else 7 * 24 * 3600
             try:
                 data = await self._get(f"/schedule/{day.isoformat()}", ttl)
             except httpx.HTTPError as exc:
@@ -120,6 +120,16 @@ class NhlClient:
     async def season_results(self) -> list[Result]:
         today = datetime.now(timezone.utc).date()
         return await self.games_between(season_start(today), today)
+
+    async def results_with_previous(self) -> list[Result]:
+        """Текущий сезон плюс прошлый (октябрь–июнь, включая плей-офф)."""
+        today = datetime.now(timezone.utc).date()
+        start = season_start(today)
+        prev_start = date(start.year - 1, 10, 1)
+        previous = await self.games_between(prev_start, date(start.year, 6, 30))
+        current = await self.games_between(start, today)
+        seen = {r.match_id for r in current}
+        return [r for r in previous if r.match_id not in seen] + current
 
     async def standings(self) -> list[StandingRow]:
         data = await self._get("/standings/now", 3 * 3600)

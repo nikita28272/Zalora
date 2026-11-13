@@ -107,12 +107,29 @@ class StatsClient:
             )
         return out
 
-    async def season_results(self, competition: str) -> list[Result]:
-        data = await self._get(f"/competitions/{competition}/matches", {"status": "FINISHED"})
+    async def season_results(self, competition: str, season: int | None = None) -> list[Result]:
+        """Сыгранные матчи сезона. season — год начала (2025 = сезон 2025/26), None — текущий."""
+        params = {"status": "FINISHED"}
+        if season is not None:
+            params["season"] = str(season)
+        # прошлые сезоны не меняются — кешируем на сутки
+        data = await self._get(f"/competitions/{competition}/matches", params,
+                               ttl=24 * 3600 if season is not None else 6 * 3600)
         results = self._parse_results(data)
         for r in results:
             r.competition = r.competition or competition
         return results
+
+    async def results_with_previous(self, competition: str) -> list[Result]:
+        """Текущий сезон плюс прошлый (если бесплатный тариф его отдаёт)."""
+        current = await self.season_results(competition)
+        try:
+            previous = await self.season_results(competition, football_season_start(utcnow().date()).year - 1)
+        except Exception as exc:  # noqa: BLE001 — прошлый сезон необязателен
+            log.info("football-data: прошлый сезон %s недоступен: %s", competition, type(exc).__name__)
+            previous = []
+        seen = {r.match_id for r in current}
+        return [r for r in previous if r.match_id not in seen] + current
 
     async def standings(self, competition: str) -> list[StandingRow]:
         data = await self._get(f"/competitions/{competition}/standings")
@@ -144,3 +161,8 @@ class StatsClient:
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def football_season_start(today: date) -> date:
+    """Европейский футбольный сезон начинается летом: с июля по июнь."""
+    return date(today.year if today.month >= 7 else today.year - 1, 7, 1)

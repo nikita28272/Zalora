@@ -10,16 +10,20 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from .analysis.poisson import PoissonModel, sport_probs
+from .analysis.poisson import PREV_SEASON_FACTOR, PoissonModel, sport_probs
 from .config import ALL_LEAGUES
+from datetime import datetime, timezone
+
 from .data.nhl import NhlClient
-from .data.stats import StatsClient
+from .data.nhl import season_start as nhl_season_start
+from .data.stats import StatsClient, football_season_start
 from .data.teams import best_match
 
 
 def _team_report(model: PoissonModel, team: str) -> list[str]:
     s = model.teams[team]
-    games = sorted((r for r in model.results if team in (r.home, r.away)), key=lambda r: r.utc_date)
+    all_games = [r for r in model.results if team in (r.home, r.away)]
+    games = model.current_season(team)  # цифры голов — по текущему сезону
     gf = ga = fgf = fga = 0
     for r in games:
         home = r.home == team
@@ -30,9 +34,11 @@ def _team_report(model: PoissonModel, team: str) -> list[str]:
         fga += fa if home else fh
     n_home, n_away = model.counts.get(team, [0, 0])
     out = [
-        f"{team}: матчей {len(games)} (дома {n_home}, в гостях {n_away})",
+        f"{team}: в текущем сезоне {len(games)} матчей, всего с прошлым сезоном {len(all_games)}"
+        f" (дома {n_home}, в гостях {n_away})",
         f"  атака {s.attack:.2f}, оборона {s.defense:.2f} (1.00 — средняя команда; оборона < 1 — пропускает меньше)",
-        f"  голы основного времени {gf}:{ga} (разница {gf - ga:+d}), итоговые с ОТ {fgf}:{fga} (разница {fgf - fga:+d})",
+        f"  текущий сезон: голы основного времени {gf}:{ga} (разница {gf - ga:+d}),"
+        f" итоговые с ОТ {fgf}:{fga} (разница {fgf - fga:+d})",
         "  последние 10 (осн. время / итог / развязка):",
     ]
     for r in games[-10:]:
@@ -53,17 +59,22 @@ async def main(argv: list[str]) -> int:
     if league is None:
         print(f"Нет лиги {code}")
         return 1
+    today = datetime.now(timezone.utc).date()
     if league.sport == "hockey":
-        results = await NhlClient().season_results()
+        results = await NhlClient().results_with_previous()
+        start = nhl_season_start(today)
     else:
-        results = await StatsClient().season_results(code)
+        results = await StatsClient().results_with_previous(code)
+        start = football_season_start(today)
     if not results:
         print("Результатов сезона не получено — источник недоступен или формат изменился.")
         return 1
-    model = PoissonModel(results)
+    model = PoissonModel(results, season_start=datetime(start.year, start.month, start.day, tzinfo=timezone.utc))
     home = best_match(home_q, model.teams.keys()) or next((t for t in model.teams if home_q.lower() in t.lower()), None)
     away = best_match(away_q, model.teams.keys()) or next((t for t in model.teams if away_q.lower() in t.lower()), None)
-    print(f"Лига {league.name_ru}: матчей в выборке {len(results)}")
+    print(f"Лига {league.name_ru}: матчей в выборке {len(results)}"
+          f" (текущий сезон {len(model.current_season())}, прошлый {len(results) - len(model.current_season())},"
+          f" вес прошлого сезона ×{PREV_SEASON_FACTOR})")
     print(f"Средние голы основного времени: хозяева {model.avg_home:.2f}, гости {model.avg_away:.2f}")
     print(f"Ничьих в основное время: {sum(r.home_goals == r.away_goals for r in results) / len(results):.1%},"
           f" поправка на ничьи ×{model.draw_boost:.2f}")

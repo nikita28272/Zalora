@@ -33,8 +33,9 @@ from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, League, settings
 from .data import news
 from .data.nhl import NhlClient
+from .data.nhl import season_start as nhl_season_start
 from .data.odds import Event, OddsClient, Quota, ScanReport
-from .data.stats import Result, StandingRow, StatsClient
+from .data.stats import Result, StandingRow, StatsClient, football_season_start
 from .data.teams import best_match
 from .db import DB, Signal
 from .sports import FOOTBALL, SPORTS, Sport, group_of, line_for, sel_ru, sel_short
@@ -200,8 +201,9 @@ class MatchContext:
         if self.model:
             mo = self.model
             lines.append(
-                f"ДОКЛАД СТАТИСТИКА (модель Пуассона, сезон): ожидаемые голы {mo.lambda_home:.2f} : "
-                f"{mo.lambda_away:.2f} (матчей в выборке: {mo.home_games} и {mo.away_games})"
+                f"ДОКЛАД СТАТИСТИКА (модель Пуассона, текущий + прошлый сезон): ожидаемые голы {mo.lambda_home:.2f} : "
+                f"{mo.lambda_away:.2f} (матчей в выборке с прошлым сезоном: {mo.home_games} и {mo.away_games};"
+                f" прошлый сезон с весом ×0.7 и затуханием)"
             )
             for sel in self.sport.outcomes:
                 if sel in mo.probs:
@@ -285,9 +287,16 @@ class Engine:
         hockey = league.sport == "hockey"
         source = "NHL API" if hockey else "football-data"
         try:
-            results = await (self.nhl.season_results() if hockey else self.stats.season_results(league.fd_code))
+            today = datetime.now(timezone.utc).date()
+            if hockey:
+                results = await self.nhl.results_with_previous()
+                start = nhl_season_start(today)
+            else:
+                results = await self.stats.results_with_previous(league.fd_code)
+                start = football_season_start(today)
             if results:
-                model = PoissonModel(results)
+                model = PoissonModel(results, season_start=datetime(start.year, start.month, start.day,
+                                                                    tzinfo=timezone.utc))
         except Exception as exc:  # noqa: BLE001 — источник может быть недоступен
             log.warning("%s: результаты %s недоступны: %s", source, league.fd_code, type(exc).__name__)
         try:

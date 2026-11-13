@@ -241,7 +241,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("matches"))
     async def cmd_matches(message: Message) -> None:
-        await message.answer("Загружаю линии и статистику, это займёт около минуты…")
+        await message.answer("Загружаю линии и статистику (первый раз за день — до 2–3 минут)…")
         try:
             matches = await engine.load_matches()
         except Exception as exc:  # noqa: BLE001

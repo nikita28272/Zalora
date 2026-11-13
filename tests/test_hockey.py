@@ -196,7 +196,52 @@ def test_diag_report_runs(monkeypatch, capsys):
     async def fake_results(self):
         return games
 
-    monkeypatch.setattr(nhl.NhlClient, "season_results", fake_results)
+    monkeypatch.setattr(nhl.NhlClient, "results_with_previous", fake_results)
     assert asyncio.run(diag.main(["NHL", "Vegas", "Nashville"])) == 0
     out = capsys.readouterr().out
     assert "атака" in out and "Прогноз модели" in out and "ml_home" in out
+
+
+
+def test_previous_season_is_weighted_and_fetched(monkeypatch):
+    from bot.analysis import poisson
+    from bot.data import nhl
+
+    start = NOW - timedelta(days=40)
+    prev = Result(1, "NHL", start - timedelta(days=200), "A", "B", 5, 0)
+    cur = Result(2, "NHL", start + timedelta(days=5), "A", "B", 1, 1)
+    m = PoissonModel([cur, prev], now=NOW, season_start=start)
+    assert m.results[0] is prev  # отсортированы по дате
+    assert m.weight(prev) == pytest.approx(poisson._weight(prev.utc_date, NOW) * poisson.PREV_SEASON_FACTOR)
+    assert m.weight(cur) == pytest.approx(poisson._weight(cur.utc_date, NOW))
+    assert m.current_season() == [cur] and m.current_season("A") == [cur]
+
+    calls = []
+
+    async def fake_between(self, a, b):
+        calls.append((a, b))
+        return [Result(len(calls), "NHL", NOW, "A", "B", 1, 0)]
+
+    monkeypatch.setattr(nhl.NhlClient, "games_between", fake_between)
+    rows = asyncio.run(nhl.NhlClient().results_with_previous())
+    (p_from, p_to), (c_from, _) = calls
+    assert p_from.month == 10 and p_to.month == 6 and c_from.year == p_from.year + 1 and len(rows) == 2
+
+
+def test_football_previous_season(monkeypatch):
+    from bot.data import stats as stats_mod
+
+    assert stats_mod.football_season_start(datetime(2026, 11, 13).date()).isoformat() == "2026-07-01"
+    assert stats_mod.football_season_start(datetime(2027, 3, 1).date()).isoformat() == "2026-07-01"
+    seasons = []
+
+    async def fake(self, competition, season=None):
+        seasons.append(season)
+        if season is not None:
+            raise RuntimeError("тариф не отдаёт прошлый сезон")
+        return [Result(1, competition, NOW, "A", "B", 1, 0)]
+
+    monkeypatch.setattr(stats_mod.StatsClient, "season_results", fake)
+    rows = asyncio.run(stats_mod.StatsClient().results_with_previous("PL"))
+    assert seasons[0] is None and seasons[1] == stats_mod.football_season_start(NOW.date()).year - 1
+    assert len(rows) == 1  # без прошлого сезона бот продолжает работать
