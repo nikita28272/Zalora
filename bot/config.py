@@ -107,6 +107,9 @@ class Settings:
     nba_min_factor: float = field(default_factory=lambda: _float("NBA_MIN_FACTOR", 2.0))  # порог перекоса графика
     nba_stake_pct: float = field(default_factory=lambda: _float("NBA_STAKE_PCT", 0.01))  # ставка при уверенном разборе
     nba_max_prob_deviation: float = field(default_factory=lambda: _float("NBA_MAX_PROB_DEVIATION", 0.12))
+    # Если линии уже загружались сегодня (например, днём нажали «🔍 Анализ») не раньше чем за столько часов,
+    # ежедневный список в SCAN_TIME берёт их из кеша и не тратит кредиты; 0 — всегда загружать заново
+    daily_reuse_hours: int = field(default_factory=lambda: _int("DAILY_REUSE_HOURS", 8))
     top_matches: int = field(default_factory=lambda: _int("TOP_MATCHES", 5))
     top_min_edge: float = field(default_factory=lambda: _float("TOP_MIN_EDGE", -0.01))
     max_prob_deviation: float = field(default_factory=lambda: _float("MAX_PROB_DEVIATION", 0.08))

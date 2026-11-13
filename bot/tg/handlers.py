@@ -802,7 +802,8 @@ async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
 async def run_morning_matches(bot: Bot, engine: Engine, chat_id: int) -> None:
     """11:00: все матчи футбола и хоккея на 48 часов и кнопка «🔍 Анализ»."""
     try:
-        matches = await engine.load_matches(max_age_minutes=settings.odds_scan_max_age_minutes)
+        # линии, загруженные сегодня днём, переиспользуем — кредиты не тратятся
+        matches = await engine.load_matches(max_age_minutes=engine.daily_max_age())
     except Exception as exc:  # noqa: BLE001
         log.exception("morning matches failed")
         await bot.send_message(chat_id, f"Не удалось загрузить матчи: {type(exc).__name__}")

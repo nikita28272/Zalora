@@ -107,3 +107,24 @@ def test_days_until_reset():
     assert days_until_reset(date(2026, 11, 13), 20) == 7
     assert days_until_reset(date(2026, 12, 31), 1) == 1
     assert days_until_reset(date(2026, 11, 20), 20) == 30  # в день обновления — до следующего
+
+
+
+def test_daily_list_reuses_lines_loaded_today():
+    from datetime import datetime, timedelta, timezone
+
+    from bot.config import settings
+    from bot.db import DB
+    from bot.pipeline import Engine
+
+    from zoneinfo import ZoneInfo
+
+    engine = Engine(DB(":memory:"))
+    tz = ZoneInfo(settings.timezone)  # 16:00 по местному времени, как в расписании
+    now = datetime.now(tz).replace(hour=16, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    assert engine.daily_max_age(now) == settings.odds_scan_max_age_minutes  # ничего не загружали
+    engine._events = (1.0, [])
+    engine._events_at = now - timedelta(hours=3)
+    assert engine.daily_max_age(now) == settings.daily_reuse_hours * 60  # загружали днём — из кеша
+    engine._events_at = now - timedelta(hours=settings.daily_reuse_hours + 1)
+    assert engine.daily_max_age(now) == settings.odds_scan_max_age_minutes  # слишком давно

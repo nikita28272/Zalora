@@ -349,6 +349,7 @@ class Engine:
         self.nba = NbaClient()
         self.matches: list[MatchContext] = []
         self._events: tuple[float, list[Event]] = (0.0, [])
+        self._events_at: datetime | None = None  # когда линии загружены (для ежедневного списка)
         self.last_report: ScanReport | None = None
         self._headlines: tuple[float, list[news.Headline]] = (0.0, [])
         self._lock = asyncio.Lock()
@@ -404,11 +405,25 @@ class Engine:
             return cached
         fresh, report = await self.odds.upcoming(allowance=self.scan_allowance())
         self._events = (time.monotonic(), fresh)
+        self._events_at = datetime.now(timezone.utc)
         self.last_report = report
         self._save_quota()
         today = local(datetime.now(timezone.utc)).date().isoformat()
         self.db.set(f"odds_spent:{today}", int(self.db.get(f"odds_spent:{today}", 0)) + report.spent)
         return fresh
+
+    def daily_max_age(self, now: datetime | None = None) -> int:
+        """Допустимый возраст линий для ежедневного списка (минуты).
+
+        Если сегодня линии уже загружались (не раньше DAILY_REUSE_HOURS назад), берём их из кеша:
+        повторная загрузка в SCAN_TIME потратила бы кредиты на почти те же данные."""
+        now = now or datetime.now(timezone.utc)
+        at = self._events_at
+        hours = settings.daily_reuse_hours
+        if (hours > 0 and at is not None and self._events[0]
+                and local(at).date() == local(now).date() and now - at <= timedelta(hours=hours)):
+            return hours * 60
+        return settings.odds_scan_max_age_minutes
 
     def scan_allowance(self) -> float | None:
         """Сколько кредитов можно потратить сейчас, чтобы остатка хватило до обновления лимита.
