@@ -289,3 +289,30 @@ def test_poisson_accounts_for_opponent_strength():
     assert m.teams["A"].attack > m.teams["B"].attack
     assert m.teams["A"].defense < m.teams["B"].defense  # меньше — значит надёжнее
     assert m.predict("A", "B").probs["home"] > m.predict("A", "B").probs["away"]
+
+
+# ---------- кредиты The Odds API ----------
+def test_quota_tracking_persists_and_warns(monkeypatch):
+    import httpx
+
+    from bot.data import odds as odds_mod
+    from bot.pipeline import Engine
+    from bot.tg import formatting as fmt
+
+    def handler(request):
+        assert request.url.path.endswith("/v4/sports")  # бесплатный эндпоинт
+        return httpx.Response(200, json=[], headers={"x-requests-remaining": "42", "x-requests-used": "458"})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(odds_mod.httpx, "AsyncClient",
+                        lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw))
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    assert "пока неизвестно" in fmt.quota_line(engine.quota())
+    q = asyncio.run(engine.refresh_quota())
+    assert (q.remaining, q.used, q.total) == (42, 458, 500)
+
+    restarted = Engine(db)  # после перезапуска бот помнит остаток из базы
+    line = fmt.quota_line(restarted.quota())
+    assert "осталось <b>42</b> из 500" in line and "заканчиваются" in line

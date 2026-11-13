@@ -7,6 +7,7 @@ from html import escape
 from ..agents.schemas import OutcomeView
 from ..config import settings
 from ..db import Signal, Summary, summarize
+from ..data.odds import Quota
 from ..pipeline import AnalysisResult, MatchContext, local
 from ..sports import SPORTS, sel_short
 
@@ -47,6 +48,7 @@ HELP = f"""<b>Бот сигналов</b>: ⚽ топ-5 лиг и Лига че�
 /bank [сумма]: показать или задать банк
 /limits: лимиты финансиста
 /resume: снять паузу после серии проигрышей
+/credits: остаток кредитов The Odds API (проверка бесплатная)
 /usage: расход на Claude API
 /settle: проверить исходы вручную
 
@@ -370,3 +372,18 @@ DOSSIER_HINT = (
     "☝️ Нажмите «Копировать» в правом верхнем углу блока выше, затем вставьте текст в чат с Claude.\n"
     "Строку <code>/verdict …</code> из ответа босса отправьте сюда."
 )
+
+
+LOW_QUOTA = 50
+
+
+def quota_line(q: Quota | None) -> str:
+    if q is None:
+        return "💳 Кредиты The Odds API: пока неизвестно (обновить: /credits)"
+    from datetime import datetime
+    when = local(datetime.fromisoformat(q.checked_at)).strftime("%d.%m %H:%M")
+    text = f"💳 Кредиты The Odds API: осталось <b>{q.remaining}</b> из {q.total} (на {when})"
+    if q.remaining < LOW_QUOTA:
+        text += ("\n⚠️ Кредиты заканчиваются. Новые линии могут перестать приходить до начала следующего месяца. "
+                 "Можно отключить часть лиг: <code>bash scripts/set.sh ENABLED_LEAGUES PL,BL1,NHL</code>")
+    return text

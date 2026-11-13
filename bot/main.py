@@ -28,6 +28,7 @@ COMMANDS = [
     BotCommand(command="history", description="Последние рассчитанные"),
     BotCommand(command="bank", description="Банк: /bank 10000"),
     BotCommand(command="limits", description="Лимиты риска"),
+    BotCommand(command="credits", description="Остаток кредитов The Odds API"),
     BotCommand(command="usage", description="Расход на Claude API"),
     BotCommand(command="settle", description="Рассчитать итоги"),
     BotCommand(command="help", description="Помощь"),

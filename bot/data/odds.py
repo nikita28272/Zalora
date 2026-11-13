@@ -109,10 +109,46 @@ def parse_event(raw: dict, league: League) -> Event:
     return event
 
 
+@dataclass
+class Quota:
+    remaining: int
+    used: int
+    checked_at: str  # ISO-время проверки (UTC)
+
+    @property
+    def total(self) -> int:
+        return self.remaining + self.used
+
+
+def _int_header(resp: httpx.Response, name: str) -> int | None:
+    raw = resp.headers.get(name)
+    try:
+        return int(float(raw)) if raw is not None else None
+    except ValueError:
+        return None
+
+
 class OddsClient:
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or settings.odds_api_key
-        self.requests_remaining: str | None = None
+        self.quota: Quota | None = None
+
+    @property
+    def requests_remaining(self) -> int | None:
+        return self.quota.remaining if self.quota else None
+
+    def _remember(self, resp: httpx.Response) -> None:
+        remaining, used = _int_header(resp, "x-requests-remaining"), _int_header(resp, "x-requests-used")
+        if remaining is not None:
+            self.quota = Quota(remaining, used or 0, datetime.now(timezone.utc).isoformat())
+
+    async def check_quota(self) -> Quota | None:
+        """Остаток кредитов. Запрос списка видов спорта у The Odds API кредиты не тратит."""
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(f"{BASE_URL}/sports", params={"apiKey": self.api_key})
+        resp.raise_for_status()
+        self._remember(resp)
+        return self.quota
 
     async def _get(self, client: httpx.AsyncClient, league: League, markets: str, hours: int) -> httpx.Response:
         now = datetime.now(timezone.utc)
@@ -138,7 +174,7 @@ class OddsClient:
         if resp.status_code == 404:
             return []  # лига не в сезоне
         resp.raise_for_status()
-        self.requests_remaining = resp.headers.get("x-requests-remaining", self.requests_remaining)
+        self._remember(resp)
         return [parse_event(raw, league) for raw in resp.json()]
 
     async def upcoming(self, hours: int | None = None) -> list[Event]:

@@ -33,7 +33,7 @@ from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, League, settings
 from .data import news
 from .data.nhl import NhlClient
-from .data.odds import Event, OddsClient
+from .data.odds import Event, OddsClient, Quota
 from .data.stats import Result, StandingRow, StatsClient
 from .data.teams import best_match
 from .db import DB, Signal
@@ -276,7 +276,26 @@ class Engine:
             return cached
         fresh = await self.odds.upcoming()
         self._events = (time.monotonic(), fresh)
+        self._save_quota()
         return fresh
+
+    # ---------- кредиты The Odds API ----------
+    def _save_quota(self) -> None:
+        q = self.odds.quota
+        if q:
+            self.db.set("odds_quota", {"remaining": q.remaining, "used": q.used, "checked_at": q.checked_at})
+
+    def quota(self) -> Quota | None:
+        """Последний известный остаток (переживает перезапуск бота)."""
+        if self.odds.quota:
+            return self.odds.quota
+        raw = self.db.get("odds_quota")
+        return Quota(**raw) if raw else None
+
+    async def refresh_quota(self) -> Quota | None:
+        await self.odds.check_quota()
+        self._save_quota()
+        return self.quota()
 
     async def load_matches(self) -> list[MatchContext]:
         events = [e for e in await self._upcoming() if is_prematch(e.kickoff)]

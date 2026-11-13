@@ -143,7 +143,8 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             log.exception("load_matches failed")
             await message.answer(f"Не удалось загрузить матчи: {type(exc).__name__}")
             return
-        await send_long(message.bot, message.chat.id, fmt.matches_list(matches))
+        await send_long(message.bot, message.chat.id,
+                        fmt.matches_list(matches) + "\n\n" + fmt.quota_line(engine.quota()))
 
     @owner.message(Command("analyze"))
     async def cmd_analyze(message: Message, command: CommandObject) -> None:
@@ -261,7 +262,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if not settings.api_mode:
             await message.answer(
                 "Режим «босс в чате»: Claude API не используется, бот ничего не тратит на нейросеть.\n"
-                f"Кредитов The Odds API осталось: {engine.odds.requests_remaining or 'неизвестно'}"
+                + fmt.quota_line(engine.quota())
             )
             return
         u = db.llm_usage_since(30)
@@ -274,9 +275,20 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             f"Веб-поисков: {u['web_searches']}\n"
             f"Оценка расходов: ≈ ${cost:.2f} (в среднем ${avg:.2f} за разбор)\n"
             f"Модели: главный {settings.llm_model_chief}, помощники {settings.llm_model_agents}\n"
-            f"Кредитов The Odds API осталось: {engine.odds.requests_remaining or 'неизвестно'}"
             .replace(",", " ")
+            + fmt.quota_line(engine.quota())
         )
+
+    @owner.message(Command("credits"))
+    async def cmd_credits(message: Message) -> None:
+        try:
+            q = await engine.refresh_quota()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("quota check failed: %s", type(exc).__name__)
+            await message.answer("Не удалось связаться с The Odds API. Последние известные данные:\n"
+                                 + fmt.quota_line(engine.quota()))
+            return
+        await message.answer(fmt.quota_line(q) + "\n<i>Проверка остатка кредиты не тратит.</i>")
 
     @owner.message(Command("settle"))
     async def cmd_settle(message: Message) -> None:
@@ -409,7 +421,8 @@ async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
         await bot.send_message(chat_id, f"Не удалось подобрать кандидатов: {type(exc).__name__}")
         return
     kb = dossier_keyboard([num for num, _ in items]) if items else None
-    await bot.send_message(chat_id, fmt.candidates_message(items, len(matches)), reply_markup=kb)
+    text = fmt.candidates_message(items, len(matches)) + "\n\n" + fmt.quota_line(engine.quota())
+    await bot.send_message(chat_id, text, reply_markup=kb)
 
 
 async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:
