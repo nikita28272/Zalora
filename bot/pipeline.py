@@ -30,6 +30,7 @@ from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsRepo
 from .analysis.bankroll import (StakeDecision, analysis_pct, decide_stake, edge, flat_stake,
                                 min_acceptable_odds, risk_mode, round_stake)
 from .analysis.market import MarketView, market_view
+from .analysis.altlines import alt_market, safe_options, safe_text
 from .analysis.basketball import NbaModel
 from .analysis.nba_factors import Factors, nba_factors
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
@@ -62,6 +63,10 @@ def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result
         return "won" if rh == ra else "lost"
     if selection == "away":
         return "won" if rh < ra else "lost"
+    if selection == "dc_home":  # двойной шанс 1X (основное время)
+        return "won" if rh >= ra else "lost"
+    if selection == "dc_away":  # X2
+        return "won" if rh <= ra else "lost"
     if selection == "ml_home":
         return "won" if fh > fa else "lost"
     if selection == "ml_away":
@@ -82,16 +87,17 @@ def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result
     raise ValueError(f"Неизвестный исход {selection}")
 
 
-def same_scenario(ctx: "MatchContext", a: str, b: str) -> str:
+def same_scenario(ctx: "MatchContext", a: str, b: str, lines: dict | None = None) -> str:
     """Почему два исхода одного матча — по сути одна ставка (или пусто, если независимы)."""
     pair = {a, b}
     for side in ("home", "away"):
-        if pair <= {side, f"ml_{side}", f"hcp_{side}"}:
+        if pair <= {side, f"ml_{side}", f"hcp_{side}", f"dc_{side}"}:
             return "победа и фора за одну команду"
     hcp = next((s for s in pair if s.startswith("hcp_")), None)
     total = next((s for s in pair if s in ("over", "under")), None)
     if hcp and total:
-        line = ctx.line(hcp)
+        line = (lines or {}).get(hcp)
+        line = ctx.line(hcp) if line is None else line
         if line is not None and line > 0 and total == "under":
             return "фора андердога и «меньше» — оба про вязкую игру с малым счётом"
         if line is not None and line < 0 and total == "over":
@@ -317,6 +323,8 @@ class Pick:
     stake: float  # рекомендованная (или бумажная) сумма
     note: str  # слово финансиста
     hot: bool = False  # 🔥
+    line: float | None = None  # линия исхода (у запасной линии — своя)
+    estimated: bool = False  # кэф оценочный (запасная линия / двойной шанс)
     rank: int = 0
     signal_id: int | None = None
 
@@ -851,10 +859,11 @@ class Engine:
         else:
             cand = "КАНДИДАТ ОТ МОДЕЛИ: нет явного перевеса."
         if ctx.sport.key == "basketball" and settings.nba_mode == "analysis":
-            return "\n\n".join([
+            return "\n\n".join(x for x in [
                 f"ДОСЬЕ #{num} ДЛЯ БОССА",
                 ctx.brief(),
                 ctx.numbers(),
+                safe_text(ctx),
                 self.finance_report(),
                 "РЕЖИМ НБА: ПО АНАЛИЗУ (не по перевесу над линией).",
                 "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md, раздел «НБА: работа по анализу»:\n"
@@ -862,15 +871,17 @@ class Engine:
                 "перелёты», «статистика матчапа», «эксперты (зарубежные и РУ)», затем «адвоката дьявола».\n"
                 f"2. Каждый докладывает по всем исходам: {codes}.\n"
                 "3. Проверь факторы графика бота, оцени вероятность каждого исхода по фактам.\n"
-                "4. Выбери ДВА исхода с самым сильным обоснованием. Уверенность: high — 3+ независимых "
-                "фактора за и нет вопросов по составу; medium — 2 фактора; low — иначе.\n"
+                "4. Выбери ДВА исхода с самым сильным обоснованием; цель — заход 60–70% при кэфе ~1.5–1.8, "
+                "поэтому предпочитай варианты с высокой вероятностью (код@линия). Уверенность: high — 3+ "
+                "независимых фактора за и нет вопросов по составу; medium — 2 фактора; low — иначе.\n"
                 f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
                 f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
-            ])
-        return "\n\n".join([
+            ] if x)
+        return "\n\n".join(x for x in [
             f"ДОСЬЕ #{num} ДЛЯ БОССА",
             ctx.brief(),
             ctx.numbers(),
+            safe_text(ctx),
             self.finance_report(),
             cand,
             "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md репозитория nikita28272/Zalora:\n"
@@ -886,11 +897,12 @@ class Engine:
             +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
-            f"4. Выбери ДВА лучших исхода: сначала с перевесом от {settings.min_edge:.0%}, если таких нет — "
+            f"4. Выбери ДВА лучших исхода: цель — заход 60–70% при кэфе ~1.5–1.8 (варианты с высокой "
+            f"вероятностью выше, код@линия), среди них — с перевесом от {settings.min_edge:.0%}; если таких нет — "
             "с наибольшим перевесом из оставшихся. Последней строкой — команда для бота:\n"
             f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
             f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
-        ])
+        ] if x)
 
     async def candidates(self) -> tuple[list[MatchContext], list[tuple[int, MatchContext]]]:
         async with self._lock:
@@ -918,7 +930,7 @@ class Engine:
                 raise ValueError("Матч скоро начнётся или уже идёт. Работаем только в прематче.")
             return self.save_candidate(ctx), ctx
 
-    def manual_top(self, num: int, picks: list[tuple[str, float]], confidence: str = "medium",
+    def manual_top(self, num: int, picks: list, confidence: str = "medium",
                    hot: set[str] | None = None, link: bool = False) -> TopPicks:
         """Вердикт босса из чата: два лучших исхода матча -> финансист -> два прогноза в журнал.
 
@@ -934,10 +946,22 @@ class Engine:
             raise ValueError("Матч вот-вот начнётся или уже идёт: работаем только в прематче, прогноз не записываю.")
         if not 1 <= len(picks) <= 2:
             raise ValueError("Нужно один или два исхода.")
-        if len({sel for sel, _ in picks}) != len(picks):
+        # исход: (код, вероятность) или (код, вероятность, линия) — запасная линия / двойной шанс
+        picks = [(p[0], p[1], p[2] if len(p) > 2 else None) for p in picks]
+        if len({sel for sel, _, _ in picks}) != len(picks):
             raise ValueError("Исходы в вердикте повторяются.")
         fair = ctx.market.fair
-        for sel, _ in picks:
+        alt = {}  # код -> (честная вероятность, оценочный кэф, линия)
+        main = []
+        for sel, p, line in picks:
+            if sel in ("dc_home", "dc_away") or (line is not None and line != ctx.line(sel)):
+                got = alt_market(ctx, sel, line)
+                if got is None:
+                    raise ValueError(f"Для исхода «{sel}» с линией {line} вероятность посчитать нельзя.")
+                alt[sel] = (got[0], got[1], line)
+            else:
+                main.append((sel, p))
+        for sel, _ in main:
             if sel not in ctx.sport.outcomes:
                 raise ValueError(f"Для этого вида спорта нет исхода «{sel}».")
             if sel not in fair or not ctx.market.avg_odds.get(sel):
@@ -957,7 +981,7 @@ class Engine:
         # вероятности босса по всем исходам: выбранные — как сказал босс, остальные в том же рынке
         # делят остаток пропорционально рынку
         probs = {o: fair.get(o, 0.5) for o in ctx.sport.outcomes}
-        chosen = dict(picks)
+        chosen = dict(main)
         for group in ctx.sport.groups:
             fixed = {o: chosen[o] for o in group if o in chosen}
             if not fixed:
@@ -972,7 +996,7 @@ class Engine:
         res = AnalysisResult(ctx=ctx)
         res.verdict = ChiefVerdict(
             outcomes=[ChiefOutcome(selection=o, probability=probs[o], comment="") for o in ctx.sport.outcomes],
-            decision="bet", selection=picks[0][0], confidence=confidence,
+            decision="bet", selection=main[0][0] if main else ctx.sport.outcomes[0], confidence=confidence,
             reasoning=f"Полный разбор с субагентами — в чате с боссом (досье #{num}).", pros=[], cons=[],
         )
         self._build_table(res)
@@ -982,9 +1006,16 @@ class Engine:
         state = self.db.risk_state()
         made: list[Pick] = []
         by_analysis = ctx.sport.key == "basketball" and settings.nba_mode == "analysis"
-        for sel, _ in picks:
-            row = res.table[sel]
-            p, odds, ev = row.p_final, row.odds, row.edge or 0.0
+        dev = settings.nba_max_prob_deviation if ctx.sport.key == "basketball" else settings.max_prob_deviation
+        for sel, boss_p, _ in picks:
+            if sel in alt:  # запасная линия: рынок — пересчёт честной линии, кэф оценочный
+                p_mkt, odds, line = alt[sel]
+                p = min(max(boss_p, p_mkt - dev), p_mkt + dev, 0.99)
+                p_market, ev, estimated = p_mkt, p * odds - 1, True
+            else:
+                row = res.table[sel]
+                p, odds, p_market, ev = row.p_final, row.odds, row.p_market, row.edge or 0.0
+                line, estimated = ctx.line(sel), False
             in_range = settings.min_odds <= odds <= settings.max_odds
             if by_analysis:
                 # НБА: ставка по силе разбора (уверенность босса), а не по перевесу над линией
@@ -998,7 +1029,8 @@ class Engine:
                     note = ("разбор слабый: если ставить, то не больше "
                             f"{settings.paper_stake_pct:.1%} банка" if in_range
                             else f"кэф вне диапазона {settings.min_odds}–{settings.max_odds}")
-                made.append(Pick(sel, p, row.p_market, odds, ev, round(1 / p, 2), positive, stake, note))
+                made.append(Pick(sel, p, p_market, odds, ev, round(1 / p, 2), positive, stake, note,
+                                 line=line, estimated=estimated))
                 continue
             positive = ev >= settings.min_edge and in_range
             if positive:
@@ -1015,7 +1047,8 @@ class Engine:
                     note = f"кэф вне диапазона {settings.min_odds}–{settings.max_odds}; " + note
             # для ставок с перевесом — минимальный кэф с перевесом от MIN_EDGE, для прочих — «в ноль»
             min_odds = min_acceptable_odds(p, settings.min_edge) if ev >= settings.min_edge else 1 / p
-            made.append(Pick(sel, p, row.p_market, odds, ev, round(min_odds, 2), positive, stake, note))
+            made.append(Pick(sel, p, p_market, odds, ev, round(min_odds, 2), positive, stake, note,
+                             line=line, estimated=estimated))
         hot = hot or set()
         for pk in made:  # 🔥: отметил босс, или сильный исход по правилу
             auto = (confidence == "high") if by_analysis else False
@@ -1024,7 +1057,7 @@ class Engine:
 
         self.db.delete_signals([s.id for s in old])
         for rank, pk in enumerate(made, 1):
-            row = res.table[pk.selection]
+            row = res.table.get(pk.selection)
             pk.rank = rank
             pk.signal_id = self.db.add_signal(
                 event_id=ctx.event.event_id,
@@ -1038,20 +1071,21 @@ class Engine:
                 min_odds=pk.min_odds,
                 p_final=round(pk.p, 4),
                 p_market=round(pk.p_market, 4),
-                p_model=round(row.p_model, 4) if row.p_model is not None else None,
+                p_model=round(row.p_model, 4) if row and row.p_model is not None and not pk.estimated else None,
                 edge=round(pk.edge, 4),
                 stake=pk.stake,
                 confidence=confidence,
-                reasoning=f"Топ-{rank} босса по досье #{num}",
+                reasoning=f"Топ-{rank} босса по досье #{num}" + (" (кэф оценочный)" if pk.estimated else ""),
                 sport=ctx.sport.key,
-                line=ctx.line(pk.selection),
+                line=pk.line,
                 source="boss",
                 pick_rank=rank,
                 hot=1 if pk.hot else 0,
             )
         link_reason = ""
         if len(made) == 2:
-            link_reason = same_scenario(ctx, made[0].selection, made[1].selection) or (
+            link_reason = same_scenario(ctx, made[0].selection, made[1].selection,
+                                        {pk.selection: pk.line for pk in made}) or (
                 "босс: исходы зависят от одного сценария матча" if link else "")
             if link_reason and made[0].signal_id and made[1].signal_id:
                 self.db.link(made[0].signal_id, made[1].signal_id)
@@ -1104,6 +1138,15 @@ class Engine:
 
     @staticmethod
     def _daily_score(m: MatchContext) -> tuple[float, str]:
+        score, why = Engine._daily_reason(m)
+        opts = safe_options(m)
+        if opts:
+            o = opts[0]
+            why += f"; надёжный вариант: {o.label} ~{o.p:.0%}, кэф {'≈' if o.estimated else ''}{o.odds:.2f}"
+        return score, why
+
+    @staticmethod
+    def _daily_reason(m: MatchContext) -> tuple[float, str]:
         if m.sport.key == "basketball" and settings.nba_mode == "analysis":
             f = m.factors
             if f is None:

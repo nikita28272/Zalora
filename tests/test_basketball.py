@@ -348,3 +348,67 @@ def test_financier_blocks_second_bet_of_same_scenario():
     db.decide(first.id, placed=True, odds=1.9, stake=50)
     plan = signal_plan(db, db.signal(second.id), 1.9)
     assert plan.stake == 0 and "🔗 вы уже стоите на этом сценарии" in plan.reason
+
+
+
+# ---------- исходы с высокой вероятностью ----------
+def test_safe_lines_nba_and_alt_verdict():
+    from bot.analysis.altlines import alt_market, safe_options
+    from bot.tg.handlers import parse_verdict
+
+    ctx = _nba_ctx("safe", NOW + timedelta(days=1), None)  # Ф1(-5.5) ~50%, тотал 225.5 ~50%
+    opts = {o.selection: o for o in safe_options(ctx) if o.estimated}
+    assert set(opts) >= {"hcp_home", "hcp_away", "over", "under"}
+    assert any(o.selection == "ml_home" and not o.estimated for o in safe_options(ctx))  # П1 фаворита 1.54
+    for o in opts.values():
+        assert 0.57 <= o.p <= 0.68 and 1.4 <= o.odds <= 1.7 and o.estimated
+    assert opts["hcp_home"].line > -5.5 and opts["under"].line > 225.5  # запас в сторону ставки
+    p, odds = alt_market(ctx, "hcp_home", 10.5)
+    assert p > 0.75  # +10.5 при ожидаемой победе хозяев — почти наверняка
+
+    n, picks, conf = parse_verdict(f"5 hcp_home@{opts['hcp_home'].line:+g} 0.66 under@{opts['under'].line:g} 0.64 high")
+    assert picks[0][2] == opts["hcp_home"].line and picks[1][0] == "under"
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    num = engine.save_candidate(ctx)
+    top = engine.manual_top(num, picks, conf)
+    first = db.signal(top.picks[0].signal_id)
+    assert first.line == opts["hcp_home"].line and top.picks[0].estimated
+    text = fmt.top_picks(top, db.bankroll())
+    assert "оценочный — сверьте" in text and f"Ф1({opts['hcp_home'].line:+g})" in text
+
+    # расчёт по запасной линии
+    db.conn.execute("UPDATE signals SET kickoff = ?", ((NOW - timedelta(hours=4)).isoformat(),))
+
+    async def finished(date_from, date_to):
+        return [Result(77, "NBA", NOW - timedelta(hours=4), HOME, "LA Clippers", 113, 110, 113, 110)]
+
+    engine.nba.finished_between = finished
+    settled = {s.selection: s for s in asyncio.run(engine.settle())}
+    # хозяева выиграли 3 очка: фора с запасом (меньше основной −5.5) — зашло; «меньше» 223 при линии > 225.5 — зашло
+    assert settled["hcp_home"].status == "won" and settled["under"].status == "won"
+
+
+def test_double_chance_football():
+    import sys
+    sys.path.insert(0, "tests")
+    from test_pipeline import _ctx
+    from bot.analysis.altlines import alt_market
+    from bot.pipeline import settle_outcome
+    from bot.tg.handlers import parse_verdict
+
+    ctx = _ctx(NOW + timedelta(days=1))
+    p, odds = alt_market(ctx, "dc_home", None)
+    assert abs(p - (ctx.market.fair["home"] + ctx.market.fair["draw"])) < 1e-9 and odds < 1.6
+    n, picks, conf = parse_verdict("3 1x 0.75 x2 0.55")
+    assert picks == [("dc_home", 0.75), ("dc_away", 0.55)]
+    r = Result(1, "PL", NOW, "A", "B", 1, 1)
+    assert settle_outcome("football", "dc_home", None, r) == "won" and settle_outcome("football", "dc_away", None, r) == "won"
+    r2 = Result(2, "PL", NOW, "A", "B", 0, 2)
+    assert settle_outcome("football", "dc_home", None, r2) == "lost"
+    db = DB(":memory:")
+    engine = Engine(db)
+    num = engine.save_candidate(ctx)
+    top = engine.manual_top(num, [("dc_home", 0.72)], "medium")
+    assert top.picks[0].estimated and "1X" in fmt.top_picks(top, db.bankroll())

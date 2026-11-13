@@ -89,6 +89,9 @@ _SEL_ALIASES = {
     "ml_away": "ml_away", "п2от": "ml_away", "п2_от": "ml_away", "п2(от)": "ml_away",
     "hcp_home": "hcp_home", "ф1": "hcp_home",
     "hcp_away": "hcp_away", "ф2": "hcp_away",
+    # двойной шанс (футбол)
+    "dc_home": "dc_home", "1x": "dc_home", "1х": "dc_home",
+    "dc_away": "dc_away", "x2": "dc_away", "х2": "dc_away",
 }
 _CONF_ALIASES = {
     "low": "low", "низкая": "low", "medium": "medium", "средняя": "medium", "high": "high", "высокая": "high",
@@ -98,6 +101,7 @@ VERDICT_USAGE = (
     "Например: <code>/verdict 7 home 0.54 under 0.56 medium</code>\n"
     "Исход — код из досье: home/draw/away/over/under, в хоккее ещё ml_home/ml_away/hcp_home/hcp_away.\n"
     "Вероятность: 0.54 или 54%. Можно и один исход.\n"
+    "Линия с запасом: <code>hcp_home@+12.5</code>, <code>under@225.5</code>; двойной шанс: <code>1x</code>, <code>x2</code>.\n"
     "🔥 в конце: <code>fire</code> — на первый исход, <code>fire2</code> — на оба."
 )
 
@@ -155,10 +159,17 @@ def parse_verdict(args: str) -> tuple[int, list[tuple[str, float]], str] | None:
         return None
     picks = []
     for i in range(0, len(rest), 2):
-        sel, p = _SEL_ALIASES.get(rest[i].lower()), _parse_prob(rest[i + 1])
+        code, _, raw_line = rest[i].lower().partition("@")  # запасная линия: hcp_home@+12.5, under@225.5
+        sel, p = _SEL_ALIASES.get(code), _parse_prob(rest[i + 1])
         if sel is None or p is None:
             return None
-        picks.append((sel, p))
+        if raw_line:
+            try:
+                picks.append((sel, p, float(raw_line.replace(",", "."))))
+            except ValueError:
+                return None
+        else:
+            picks.append((sel, p))
     return num, picks, conf
 
 
@@ -529,7 +540,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             return
         num, picks, conf = parsed
         try:
-            top = engine.manual_top(num, picks, conf, hot={sel for sel, _ in picks[:fire]}, link=link)
+            top = engine.manual_top(num, picks, conf, hot={pk[0] for pk in picks[:fire]}, link=link)
         except ValueError as exc:
             await message.answer(str(exc))
             return

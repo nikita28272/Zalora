@@ -648,8 +648,10 @@ def top_picks(top: TopPicks, bank: float) -> str:
             tag = "✅ есть перевес" if pk.positive else "⚪ без перевеса"
         lines += [
             "",
-            f"<b>{pk.rank}. {'🔥 ' if pk.hot else ''}{escape(ctx.short(pk.selection))}</b> — {tag}",
-            f"   вероятность {pk.p:.0%} (рынок {pk.p_market:.0%}), кэф {pk.odds:.2f}, перевес {pk.edge:+.1%}",
+            f"<b>{pk.rank}. {'🔥 ' if pk.hot else ''}{escape(sel_short(ctx.sport, pk.selection, pk.line))}</b>"
+            f" — {tag}",
+            f"   вероятность {pk.p:.0%} (рынок {pk.p_market:.0%}), кэф {'≈' if pk.estimated else ''}{pk.odds:.2f}"
+            f"{' (оценочный — сверьте в конторе)' if pk.estimated else ''}, перевес {pk.edge:+.1%}",
         ]
         if by_analysis:
             lines.append(f"   💰 {_money(pk.stake)} — {escape(pk.note)}")

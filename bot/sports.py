@@ -87,6 +87,10 @@ def line_for(selection: str, lines: dict) -> float | None:
 def sel_short(sport: Sport, selection: str, line: float | None = None) -> str:
     """Короткая подпись: П1, X, ТБ2.5, П1 ОТ, Ф1(-1.5)."""
     hockey = sport.key == "hockey"
+    if selection == "dc_home":
+        return "1X"
+    if selection == "dc_away":
+        return "X2"
     if sport.key == "basketball" and selection in ("ml_home", "ml_away"):
         return "П1" if selection == "ml_home" else "П2"  # в баскетболе ничьих нет, ОТ всегда включён
     if selection == "home":
@@ -113,6 +117,9 @@ def sel_short(sport: Sport, selection: str, line: float | None = None) -> str:
 def sel_ru(sport: Sport, selection: str, line: float | None = None) -> str:
     """Подробная подпись для сигнала."""
     hockey = sport.key == "hockey"
+    if selection in ("dc_home", "dc_away"):
+        return ("1X — хозяева не проиграют" if selection == "dc_home" else "X2 — гости не проиграют") + \
+            (" (основное время)" if hockey else "")
     total = line if line is not None else sport.default_total
     if sport.key == "basketball":
         return {
