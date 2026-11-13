@@ -67,7 +67,7 @@ FLOW_API = """<b>Ваш порядок действий</b>
 3. После матча главный докладывает итог и новый баланс."""
 
 FLOW_MANUAL = f"""<b>Как это работает</b>
-1. В {settings.scan_time} бот присылает матчи футбола и хоккея на {settings.lookahead_hours} часов.
+1. В {settings.scan_time} бот присылает матчи дня к разбору: 2 хоккея, 2 НБА, 2 футбола (если есть).
 2. «🔍 Анализ» → номер матча → досье. Копируете его и отправляете в чат с Claude (боссу).
 3. Босс разбирает все исходы и даёт 2 лучших (с перевесом — первыми). Строку <code>/verdict …</code>
    из его ответа отправляете сюда.
@@ -156,6 +156,23 @@ def matches_list(matches: list[MatchContext], limit: int = 30, report: ScanRepor
     if extra:
         lines += ["", extra]
     lines += ["", "🔎 — модель видит возможный перевес; 🏀 — НБА с перекосом графика. Разбор: «🔍 Анализ»."]
+    return "\n".join(lines)
+
+
+def daily_block(picks: list[tuple[MatchContext, str]], total: int) -> str:
+    """Матчи дня к разбору: по 2 хоккея и НБА (и футбола, если есть) — с причиной выбора."""
+    if not picks:
+        return "🎯 <b>Матчи дня:</b> подходящих матчей нет."
+    lines = ["🎯 <b>Матчи дня к разбору</b>"]
+    sport = None
+    for m, why in picks:
+        if m.sport.key != sport:
+            sport = m.sport.key
+            lines += ["", f"{m.sport.emoji} <b>{escape(m.event.league.name_ru)}</b>"]
+        lines.append(f"<b>{m.idx}.</b> {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)}\n    {escape(why)}")
+    lines += ["", "Нажмите 📋 с номером — придёт досье, его — в чат с Claude."]
+    if total > len(picks):
+        lines.append(f"<i>Всего матчей в линии: {total} — остальные по кнопке «📃 Все матчи».</i>")
     return "\n".join(lines)
 
 

@@ -270,3 +270,39 @@ def _nba_ctx(eid, kickoff, factors):
     ctx = MatchContext(1, ev, market_view(ev))
     ctx.factors = factors
     return ctx
+
+
+
+def test_daily_picks_two_hockey_two_nba():
+    import sys
+    sys.path.insert(0, "tests")
+    from test_hockey import _ctx as hockey_ctx
+    from bot.analysis.nba_factors import Factors, TeamSpot
+
+    engine = Engine(DB(":memory:"))
+    now = NOW
+    hockey = []
+    for i in range(3):
+        c = hockey_ctx(now + timedelta(hours=10 + i))
+        c.idx, c.event.event_id = i + 1, f"h{i}"
+        hockey.append(c)
+
+    def nba(i, score, hours):
+        f = Factors(TeamSpot("A"), TeamSpot("B"), score, score, "хозяева" if score >= 1 else "—", ["гости на back-to-back"])
+        c = _nba_ctx(f"n{i}", now + timedelta(hours=hours), f)
+        c.idx = 10 + i
+        return c
+
+    nbas = [nba(0, 0.5, 12), nba(1, 4.0, 14), nba(2, 6.0, 40), nba(3, 2.0, 15)]
+    picks = engine.daily_picks(hockey + nbas, now=now)
+    sports = [m.sport.key for m, _ in picks]
+    assert sports.count("hockey") == 2 and sports.count("basketball") == 2 and len(picks) == 4
+    nba_ids = [m.event.event_id for m, _ in picks if m.sport.key == "basketball"]
+    assert nba_ids == ["n1", "n3"]  # n2 сильнее, но не сегодня (через 40 ч) — ближайшие сутки в приоритете
+    text = fmt.daily_block(picks, total=7)
+    assert "Матчи дня к разбору" in text and "НБА" in text and "НХЛ" in text and "Все матчи" in text
+
+    from bot.tg.handlers import daily_keyboard
+    kb = daily_keyboard(picks, 7)
+    flat = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert sum(c.startswith("pick:") for c in flat) == 4 and "menu:all" in flat

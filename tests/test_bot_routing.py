@@ -200,7 +200,8 @@ def test_morning_message_has_analyze_button():
     engine.load_matches = cached
     asyncio.run(handlers.run_morning_matches(bot, engine, OWNER))
     msg = [m for m in session.sent if isinstance(m, SendMessage)][-1]
-    assert "Матчи на" in msg.text and msg.reply_markup.inline_keyboard[0][0].callback_data == "menu:analyze"
+    assert "Матчи дня к разбору" in msg.text
+    assert msg.reply_markup.inline_keyboard[0][0].callback_data.startswith("pick:")
 
 
 def test_pressed_pick_row_is_removed():

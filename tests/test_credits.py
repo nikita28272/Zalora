@@ -131,6 +131,18 @@ def test_daily_list_reuses_lines_loaded_today():
 
 # ---------- НБА: линии только при перекосе графика ----------
 def test_nba_odds_gate_skips_league_without_schedule_edge():
+    from bot.config import settings as st
+    from bot.data.stats import Result
+
+    old_gate = st.nba_odds_gate
+    object.__setattr__(st, "nba_odds_gate", True)  # по умолчанию фильтр выключен (НБА грузим всегда)
+    try:
+        _gate_checks(st)
+    finally:
+        object.__setattr__(st, "nba_odds_gate", old_gate)
+
+
+def _gate_checks(st):
     from bot.data.stats import Result
 
     engine = Engine(DB(":memory:"))

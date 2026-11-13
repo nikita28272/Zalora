@@ -105,7 +105,12 @@ class Settings:
     nba_mode: str = field(default_factory=lambda: _env("NBA_MODE", "analysis").lower())
     # НБА «по анализу»: сначала бесплатно смотрим расписание и график; линии (3 кредита) грузим,
     # только если есть матч с перекосом графика
-    nba_odds_gate: bool = field(default_factory=lambda: _env("NBA_ODDS_GATE", "1") not in ("0", "false", "no"))
+    nba_odds_gate: bool = field(default_factory=lambda: _env("NBA_ODDS_GATE", "0") not in ("0", "false", "no"))
+    # Матчи дня к разбору: сколько матчей каждого вида спорта предлагать ежедневно
+    daily_hockey: int = field(default_factory=lambda: _int("DAILY_HOCKEY", 2))
+    daily_nba: int = field(default_factory=lambda: _int("DAILY_NBA", 2))
+    daily_football: int = field(default_factory=lambda: _int("DAILY_FOOTBALL", 2))
+    daily_window_hours: int = field(default_factory=lambda: _int("DAILY_WINDOW_HOURS", 30))  # «ближайшие сутки»
     nba_top: int = field(default_factory=lambda: _int("NBA_TOP", 3))  # сколько матчей НБА в день предлагать
     nba_min_factor: float = field(default_factory=lambda: _float("NBA_MIN_FACTOR", 2.0))  # порог перекоса графика
     nba_stake_pct: float = field(default_factory=lambda: _float("NBA_STAKE_PCT", 0.01))  # ставка при уверенном разборе

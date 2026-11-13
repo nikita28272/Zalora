@@ -1041,6 +1041,46 @@ class Engine:
         scored.sort(key=lambda x: x[2], reverse=True)
         return scored[:settings.top_matches]
 
+    def daily_picks(self, matches: list[MatchContext] | None = None,
+                    now: datetime | None = None) -> list[tuple[MatchContext, str]]:
+        """Матчи дня к разбору: DAILY_HOCKEY хоккея, DAILY_NBA баскетбола, DAILY_FOOTBALL футбола.
+
+        Хоккей и футбол — где лучший исход по модели и рынку ближе всего к перевесу; НБА — с самым
+        сильным перекосом графика. Сначала матчи ближайших DAILY_WINDOW_HOURS часов (чтобы завтрашние
+        не дублировались), если их не хватает — дальше. Уже разобранные и начавшиеся пропускаем.
+        """
+        now = now or datetime.now(timezone.utc)
+        done = self.analyzed_events()
+        pool = [m for m in (self.matches if matches is None else matches)
+                if m.event.event_id not in done and is_prematch(m.event.kickoff)]
+        soon = now + timedelta(hours=settings.daily_window_hours)
+        quota = {"hockey": settings.daily_hockey, "basketball": settings.daily_nba,
+                 "football": settings.daily_football}
+        out: list[tuple[MatchContext, str]] = []
+        for sport in ("hockey", "basketball", "football"):
+            cands = [m for m in pool if m.sport.key == sport]
+            scored = [(self._daily_score(m), m) for m in cands]
+            scored.sort(key=lambda x: (x[1].event.kickoff > soon, -x[0][0]))
+            out += [(m, why) for (_, why), m in scored[:quota[sport]]]
+        return out
+
+    @staticmethod
+    def _daily_score(m: MatchContext) -> tuple[float, str]:
+        if m.sport.key == "basketball" and settings.nba_mode == "analysis":
+            f = m.factors
+            if f is None:
+                return -1.0, "статистики графика нет"
+            if f.side == "—":
+                return f.score, "перекоса графика нет — лучший из имеющихся"
+            return f.score, (f"график в пользу {f.side_gen} ({f.score:.1f})"
+                             + (": " + "; ".join(f.reasons) if f.reasons else ""))
+        chance = m.best_chance()
+        if chance is None:
+            return -1.0, "оценки нет"
+        sel, ev = chance
+        mark = " 🔎" if ev >= settings.min_edge else ""
+        return ev, f"{m.short(sel)} {m.market.avg_odds[sel]:.2f}, оценка {ev:+.1%}{mark}"
+
     def nba_top(self, matches: list[MatchContext] | None = None) -> list[MatchContext]:
         """НБА «по анализу»: до NBA_TOP матчей с самым сильным перекосом графика и усталости
         (back-to-back против отдыха, перелёты, длинный выезд, высота), не слабее NBA_MIN_FACTOR.
