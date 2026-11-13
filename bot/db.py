@@ -184,6 +184,13 @@ def month_start_utc() -> str:
     return start.astimezone(timezone.utc).isoformat()
 
 
+def week_start_utc() -> str:
+    """Начало текущей недели (понедельник 00:00 по TIMEZONE) — недельная статистика обнуляется каждый понедельник."""
+    now = datetime.now(_tz())
+    start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.astimezone(timezone.utc).isoformat()
+
+
 def summarize(signals: list[Signal], real: bool) -> Summary | None:
     """Сводка по рассчитанным сигналам: real=True — только поставленные, иначе бумажный учёт всех."""
     # реальный учёт — все ваши ставки; бумажный — только прогнозы босса

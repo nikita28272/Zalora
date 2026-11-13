@@ -19,7 +19,7 @@ from aiogram.types import (
 
 from ..analysis.bankroll import plan_bet
 from ..config import RISK_NAMES_RU, settings
-from ..db import DB, month_start_utc
+from ..db import DB, month_start_utc, week_start_utc
 from ..pipeline import AnalysisResult, Engine
 from . import formatting as fmt
 
@@ -606,7 +606,8 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("stats"))
     async def cmd_stats(message: Message) -> None:
-        await message.answer(fmt.stats(db.settled(since=month_start_utc()), db.settled(), db.bankroll()))
+        await message.answer(fmt.stats(db.settled(since=month_start_utc()), db.settled(), db.bankroll(),
+                                       week=db.settled(since=week_start_utc())))
 
     @owner.message(Command("accuracy"))
     async def cmd_accuracy(message: Message) -> None:

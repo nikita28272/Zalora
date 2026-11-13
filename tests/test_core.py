@@ -494,3 +494,24 @@ def test_accuracy_and_bet_types():
     assert "💰 Фора: 1 из 1" in types and "💰 Тотал меньше" not in types
     assert "Лучше всего" in types or "от 10 прогнозов" in types
     assert fmt.bet_type("hockey", "ml_home") == "Победа с ОТ" and fmt.bet_type("hockey", "home") == "Победа в осн. время"
+
+
+def test_stats_week_and_month_roi():
+    from bot.db import week_start_utc
+    from bot.tg import formatting as fmt
+
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", home="A", away="B", kickoff=NOW.isoformat(),
+                odds_ref=2.0, min_odds=2.0, p_market=0.5, p_model=None, edge=0.0, stake=10,
+                confidence="medium", reasoning="r", sport="basketball", p_final=0.55)
+    a = db.add_signal(event_id="w1", selection="over", **base)
+    b = db.add_signal(event_id="w2", selection="under", **base)
+    db.decide(a, True, 2.0, 100)
+    db.settle(a, "won", "1:0", 100.0, 10.0)
+    db.settle(b, "lost", "1:0", 0.0, -10.0)
+    week = db.settled(since=week_start_utc())
+    text = fmt.stats(db.settled(), db.settled(), db.bankroll(), week=week)
+    assert text.startswith("📅 <b>ROI прогнозов босса</b>")
+    assert "неделя с" in text and "месяц с 01." in text
+    assert "ROI +0.0%</b> — 1 из 2 (50%)" in text  # бумага: +10 и −10 при обороте 20
+    assert "ваши ставки за неделю: <b>ROI +100.0%</b>" in text

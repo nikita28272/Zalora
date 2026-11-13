@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from html import escape
+from zoneinfo import ZoneInfo
 
 from ..agents.schemas import OutcomeView
 from ..config import RISK_NAMES_RU, settings
@@ -563,9 +565,28 @@ def _summary_block(title: str, s: Summary | None) -> str:
     )
 
 
-def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
+def _roi_line(title: str, sm: Summary | None) -> str:
+    if sm is None:
+        return f"  {title}: пока нет рассчитанных"
+    return (f"  {title}: <b>ROI {sm.roi:+.1%}</b> — {sm.won} из {sm.count} ({sm.won / sm.count:.0%}), "
+            f"прибыль {sm.profit:+,.0f}".replace(",", " "))
+
+
+def roi_block(week: list[Signal], month: list[Signal]) -> str:
+    """ROI всех прогнозов босса (поставленных и нет) за текущую неделю и месяц."""
+    now = datetime.now(ZoneInfo(settings.timezone))
+    monday = now - timedelta(days=now.weekday())
+    return ("📅 <b>ROI прогнозов босса</b> (все исходы, прошедшие анализ, на бумаге)\n"
+            + _roi_line(f"неделя с {monday:%d.%m}", summarize(week, real=False)) + "\n"
+            + _roi_line(f"месяц с 01.{now:%m}", summarize(month, real=False)) + "\n"
+            + _roi_line("ваши ставки за неделю", summarize(week, real=True)) + "\n"
+            + _roi_line("ваши ставки за месяц", summarize(month, real=True)))
+
+
+def stats(month: list[Signal], all_time: list[Signal], bankroll: float, week: list[Signal] | None = None) -> str:
     real_m = summarize(month, real=True)
     parts = [
+        roi_block(week if week is not None else [], month),
         _summary_block("Ваши ставки за месяц", real_m),
         _summary_block("Ваши ставки за всё время", summarize(all_time, real=True)),
         _summary_block("Прогнозы босса (на бумаге)", summarize(all_time, real=False)),
@@ -581,7 +602,7 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
             sm = summarize([s for s in all_time if s.sport == key], real=False)
             if sm:
                 per.append(f"  {SPORTS[key].emoji} {SPORTS[key].name_ru}: {sm.count} сигн., ROI {sm.roi:+.1%}")
-        parts.insert(3, "<b>Сигналы системы по видам спорта</b>\n" + "\n".join(per))
+        parts.insert(4, "<b>Сигналы системы по видам спорта</b>\n" + "\n".join(per))
     boss = [s for s in all_time if s.source == "boss"]
     pos, neg = summarize([s for s in boss if s.positive], False), summarize([s for s in boss if not s.positive], False)
     hot = summarize([s for s in boss if s.hot], False)
@@ -589,7 +610,7 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
         split = []
         for title, sm in (("🔥 отмеченные боссом", hot), ("✅ с перевесом", pos), ("⚪ без перевеса", neg)):
             split.append(f"  {title}: " + (f"{sm.won} из {sm.count}, ROI {sm.roi:+.1%}" if sm else "пока нет"))
-        parts.insert(3, "<b>Прогнозы босса по типу</b>\n" + "\n".join(split))
+        parts.insert(4, "<b>Прогнозы босса по типу</b>\n" + "\n".join(split))
     total = summarize(all_time, real=False)
     if total is None or total.count < 50:
         parts.append("<i>Меньше 50 рассчитанных сигналов: результат пока во многом случаен.</i>")
