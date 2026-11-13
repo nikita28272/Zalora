@@ -599,6 +599,120 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
     return "\n\n".join(parts)
 
 
+def bet_type(sport: str, selection: str) -> str:
+    """Тип ставки для статистики: победа, фора, тотал больше/меньше и т.д."""
+    if selection.startswith("hcp"):
+        return "Фора"
+    if selection == "over":
+        return "Тотал больше"
+    if selection == "under":
+        return "Тотал меньше"
+    if selection.startswith("dc"):
+        return "Двойной шанс"
+    if selection == "draw":
+        return "Ничья"
+    if selection.startswith("ml"):
+        return "Победа с ОТ" if sport == "hockey" else "Победа"
+    if sport == "hockey":
+        return "Победа в осн. время"
+    return "Победа"
+
+
+ACC_BUCKETS = ((0.0, 0.50, "до 50%"), (0.50, 0.55, "50–55%"), (0.55, 0.60, "55–60%"),
+               (0.60, 0.65, "60–65%"), (0.65, 1.01, "65% и выше"))
+
+
+def _acc_line(title: str, rows: list[Signal]) -> str:
+    n = len(rows)
+    won = sum(s.status == "won" for s in rows)
+    exp = sum(s.p_final for s in rows) / n
+    fact = won / n
+    if n < 5:
+        mark = "мало данных"
+    elif fact < exp - 0.05:
+        mark = "⚠️ босс завышает"
+    elif fact > exp + 0.05:
+        mark = "✅ лучше ожиданий"
+    else:
+        mark = "✅ точно"
+    return f"  {title}: ждали {exp:.0%}, зашло {fact:.0%} ({won} из {n}) — {mark}"
+
+
+def accuracy(all_time: list[Signal]) -> str:
+    """Проверка точности босса: совпадают ли его вероятности с тем, как часто исходы заходят."""
+    rows = [s for s in all_time if s.source == "boss" and s.status in ("won", "lost")]
+    if not rows:
+        return "🎯 <b>Точность босса</b>\n\nПока нет рассчитанных прогнозов босса."
+    parts = ["🎯 <b>Точность босса</b>",
+             "Если босс говорит «55%», такие исходы должны заходить примерно в 55 случаях из 100."]
+    parts.append("<b>Всего</b>\n" + _acc_line("все прогнозы", rows))
+    by_p = [_acc_line(label, [s for s in rows if lo <= s.p_final < hi])
+            for lo, hi, label in ACC_BUCKETS if any(lo <= s.p_final < hi for s in rows)]
+    parts.append("<b>По вероятности босса</b>\n" + "\n".join(by_p))
+    conf_ru = {"high": "высокая", "medium": "средняя", "low": "низкая"}
+    by_c = [_acc_line(f"уверенность {conf_ru[c]}", [s for s in rows if s.confidence == c])
+            for c in ("high", "medium", "low") if any(s.confidence == c for s in rows)]
+    if by_c:
+        parts.append("<b>По уверенности</b>\n" + "\n".join(by_c))
+    hot = [s for s in rows if s.hot]
+    if hot:
+        parts.append("<b>Отмеченные 🔥</b>\n" + _acc_line("🔥", hot))
+    # босс против рынка: средняя квадратичная ошибка (меньше — точнее)
+    scored = [s for s in rows if s.p_market]
+    if scored:
+        def brier(p_of):
+            return sum((p_of(s) - (s.status == "won")) ** 2 for s in scored) / len(scored)
+        b_boss, b_mkt = brier(lambda s: s.p_final), brier(lambda s: s.p_market)
+        verdict = ("босс точнее рынка ✅" if b_boss < b_mkt - 0.002 else
+                   "рынок точнее босса ⚠️" if b_boss > b_mkt + 0.002 else "босс и рынок на одном уровне")
+        parts.append(f"<b>Босс против букмекеров</b>\n  ошибка босса {b_boss:.3f}, рынка {b_mkt:.3f} "
+                     f"(меньше — лучше): {verdict}")
+    if len(rows) < 30:
+        parts.append(f"<i>Рассчитано {len(rows)} прогнозов. Выводы надёжны примерно от 30–50, "
+                     "до этого цифры сильно скачут.</i>")
+    return "\n\n".join(parts)
+
+
+def _type_line(title: str, rows: list[Signal], real: bool) -> str | None:
+    sm = summarize(rows, real=real)
+    if sm is None:
+        return None
+    return (f"  {title}: {sm.won} из {sm.count} ({sm.won / sm.count:.0%}), "
+            f"{'прибыль' if real else 'на бумаге'} {sm.profit:+,.0f}, ROI {sm.roi:+.1%}".replace(",", " "))
+
+
+def bet_types(all_time: list[Signal]) -> str:
+    """Статистика по типам ставок: по видам спорта и рынкам (победа, фора, тотал)."""
+    done = [s for s in all_time if s.status in ("won", "lost")]
+    if not done:
+        return "📂 <b>Статистика по типам ставок</b>\n\nПока нет рассчитанных прогнозов."
+    parts = ["📂 <b>Статистика по типам ставок</b>",
+             "🧠 — все прогнозы босса (на бумаге), 💰 — ваши реальные ставки."]
+    for key in [k for k in ("hockey", "basketball", "football") if any(s.sport == k for s in done)]:
+        sport_rows = [s for s in done if s.sport == key]
+        lines = [f"{SPORTS[key].emoji} <b>{SPORTS[key].name_ru}</b>"]
+        types = sorted({bet_type(key, s.selection) for s in sport_rows})
+        for t in types:
+            rows = [s for s in sport_rows if bet_type(key, s.selection) == t]
+            boss = _type_line(f"🧠 {t}", rows, real=False)
+            real = _type_line(f"💰 {t}", rows, real=True)
+            lines += [x for x in (boss, real) if x]
+        parts.append("\n".join(lines))
+    best = []
+    for key in {s.sport for s in done}:
+        for t in {bet_type(key, s.selection) for s in done if s.sport == key}:
+            sm = summarize([s for s in done if s.sport == key and bet_type(key, s.selection) == t], real=False)
+            if sm and sm.count >= 10:
+                best.append((sm.roi, f"{SPORTS[key].emoji} {t}"))
+    if best:
+        best.sort()
+        parts.append(f"Лучше всего: <b>{best[-1][1]}</b> (ROI {best[-1][0]:+.1%}); "
+                     f"хуже всего: <b>{best[0][1]}</b> (ROI {best[0][0]:+.1%}).")
+    else:
+        parts.append("<i>Выводы «что работает, а что нет» появятся, когда в типе наберётся от 10 прогнозов.</i>")
+    return "\n\n".join(parts)
+
+
 def candidates_message(items: list[tuple[int, MatchContext]], total: int) -> str:
     if not items:
         return (f"📋 Кандидатов сегодня нет: среди {total} матчей модель не видит перевеса. "

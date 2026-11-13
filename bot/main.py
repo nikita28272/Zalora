@@ -29,6 +29,8 @@ COMMANDS = [
     BotCommand(command="fire", description="Поставить или снять 🔥 у прогноза: /fire 9"),
     BotCommand(command="signals", description="Открытые сигналы"),
     BotCommand(command="stats", description="Статистика журнала"),
+    BotCommand(command="accuracy", description="Точность босса: ждали % / зашло %"),
+    BotCommand(command="types", description="Статистика по типам ставок"),
     BotCommand(command="history", description="Последние рассчитанные"),
     BotCommand(command="bank", description="Банк: /bank 10000"),
     BotCommand(command="limits", description="Лимиты риска"),

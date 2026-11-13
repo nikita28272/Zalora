@@ -462,3 +462,35 @@ def test_peak_tracking_and_resume_baseline():
     assert st.peak == 11000 and round(st.drawdown, 2) == 0.36
     db.reset_peak()
     assert db.risk_state().drawdown == 0
+
+
+# ---------- точность босса и типы ставок ----------
+def test_accuracy_and_bet_types():
+    from bot.tg import formatting as fmt
+
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", home="A", away="B", kickoff=NOW.isoformat(),
+                odds_ref=1.75, min_odds=1.75, p_market=0.55, p_model=None, edge=0.0, stake=10,
+                confidence="medium", reasoning="r", sport="basketball")
+    # 10 прогнозов по 55% на тотал «меньше»: зашло 4 — босс завышает
+    for i in range(10):
+        sid = db.add_signal(event_id=f"u{i}", selection="under", p_final=0.55, line=225.5, **base)
+        won = i < 4
+        db.settle(sid, "won" if won else "lost", "1:0", 0.0, 7.5 if won else -10)
+    # 2 прогноза на фору, оба зашли, один поставлен
+    for i in range(2):
+        sid = db.add_signal(event_id=f"h{i}", selection="hcp_home", p_final=0.62, line=-3.5, **base)
+        if i == 0:
+            db.decide(sid, True, 1.8, 50)
+        db.settle(sid, "won", "1:0", 40.0 if i == 0 else 0.0, 7.5)
+
+    acc = fmt.accuracy(db.settled())
+    assert "ждали 55%, зашло 40% (4 из 10) — ⚠️ босс завышает" in acc
+    assert "60–65%" in acc and "мало данных" in acc and "Босс против букмекеров" in acc
+
+    types = fmt.bet_types(db.settled())
+    assert "🏀 <b>Баскетбол</b>" in types
+    assert "🧠 Тотал меньше: 4 из 10 (40%)" in types and "🧠 Фора: 2 из 2 (100%)" in types
+    assert "💰 Фора: 1 из 1" in types and "💰 Тотал меньше" not in types
+    assert "Лучше всего" in types or "от 10 прогнозов" in types
+    assert fmt.bet_type("hockey", "ml_home") == "Победа с ОТ" and fmt.bet_type("hockey", "home") == "Победа в осн. время"

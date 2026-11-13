@@ -300,7 +300,8 @@ def test_keyboards():
 
     kb = main_keyboard()
     texts = [b.text for row in kb.keyboard for b in row]
-    assert BTN_ANALYZE in texts and len(texts) == 7 and not kb.is_persistent
+    assert BTN_ANALYZE in texts and len(texts) == 9 and not kb.is_persistent
+    assert "🎯 Точность босса" in texts and "📂 Типы ставок" in texts
 
     ctxs = []
     for i in range(7):

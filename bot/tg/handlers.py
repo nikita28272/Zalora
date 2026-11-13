@@ -290,6 +290,8 @@ BTN_SIGNALS_OLD = "📌 Мои сигналы"
 BTN_STATS = "📊 Статистика"
 BTN_BANK = "💰 Банк"
 BTN_CREDITS = "💳 Кредиты"
+BTN_ACCURACY = "🎯 Точность босса"
+BTN_TYPES = "📂 Типы ставок"
 BTN_MORE = "⚙️ Ещё"
 
 
@@ -299,6 +301,7 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=BTN_MATCHES), KeyboardButton(text=BTN_ANALYZE)],
             [KeyboardButton(text=BTN_SIGNALS), KeyboardButton(text=BTN_STATS)],
+            [KeyboardButton(text=BTN_ACCURACY), KeyboardButton(text=BTN_TYPES)],
             [KeyboardButton(text=BTN_BANK), KeyboardButton(text=BTN_CREDITS)],
             [KeyboardButton(text=BTN_MORE)],
         ],
@@ -605,6 +608,14 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
     async def cmd_stats(message: Message) -> None:
         await message.answer(fmt.stats(db.settled(since=month_start_utc()), db.settled(), db.bankroll()))
 
+    @owner.message(Command("accuracy"))
+    async def cmd_accuracy(message: Message) -> None:
+        await send_long(message.bot, message.chat.id, fmt.accuracy(db.settled()))
+
+    @owner.message(Command("types"))
+    async def cmd_types(message: Message) -> None:
+        await send_long(message.bot, message.chat.id, fmt.bet_types(db.settled()))
+
     @owner.message(Command("bank"))
     async def cmd_bank(message: Message, command: CommandObject) -> None:
         if command.args:
@@ -770,6 +781,14 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
     @owner.message(F.text == BTN_STATS)
     async def b_stats(message: Message) -> None:
         await cmd_stats(message)
+
+    @owner.message(F.text == BTN_ACCURACY)
+    async def b_accuracy(message: Message) -> None:
+        await cmd_accuracy(message)
+
+    @owner.message(F.text == BTN_TYPES)
+    async def b_types(message: Message) -> None:
+        await cmd_types(message)
 
     @owner.message(F.text == BTN_BANK)
     async def b_bank(message: Message) -> None:
