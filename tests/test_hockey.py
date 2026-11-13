@@ -174,7 +174,7 @@ def test_hockey_manual_flow_to_settlement():
     assert by_sel["hcp_home"].status == "won" and by_sel["hcp_home"].score == "4:2"
     assert by_sel["over"].status == "lost"
     report = fmt.settle_report(settled, db.bankroll())
-    assert "🏒" in report and "Прогноз 1: Ф1(-1.5)" in report and "зашло 1 из 2" in report
+    assert "🏒" in report and "Прогноз 1: 🔥 Ф1(-1.5)" in report and "🔥 Отмеченные: зашло 1 из 1" in report and "зашло 1 из 2" in report
 
 
 def test_wrong_outcome_for_sport_is_rejected():

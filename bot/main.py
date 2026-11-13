@@ -26,6 +26,7 @@ COMMANDS = [
     BotCommand(command="scan", description="Кандидаты или сигналы сейчас"),
     BotCommand(command="verdict", description="Вердикт босса: /verdict 7 home 0.54 under 0.56"),
     BotCommand(command="check", description="Поздняя проверка перед матчем: /check 7"),
+    BotCommand(command="fire", description="Поставить или снять 🔥 у прогноза: /fire 9"),
     BotCommand(command="signals", description="Открытые сигналы"),
     BotCommand(command="stats", description="Статистика журнала"),
     BotCommand(command="history", description="Последние рассчитанные"),

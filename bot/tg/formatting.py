@@ -47,6 +47,7 @@ HELP = f"""<b>Бот сигналов</b>: ⚽ топ-5 лиг и Лига че�
 /scan: {{scan_help}}
 /verdict: принять вердикт босса из чата (режим «босс в чате»)
 /check N: поздняя проверка перед матчем (вратари, составы)
+/fire N: поставить или снять 🔥 у прогноза N
 /signals: открытые сигналы и ваши отметки
 /stats: ROI за месяц и за всё время
 /history: последние рассчитанные сигналы
@@ -156,6 +157,17 @@ def matches_list(matches: list[MatchContext], limit: int = 30, report: ScanRepor
     if extra:
         lines += ["", extra]
     lines += ["", "🔎 — модель видит возможный перевес; 🏀 — НБА с перекосом графика. Разбор: «🔍 Анализ»."]
+    return "\n".join(lines)
+
+
+def hot_block(hot: list[Signal]) -> str:
+    """🔥 Обратить внимание: открытые прогнозы, отмеченные боссом, самые вероятные первыми."""
+    if not hot:
+        return ""
+    lines = ["🔥 <b>Обратить внимание</b> (отметил босс):"]
+    for s in hot:
+        lines.append(f"#{s.id} {_sig_emoji(s)} {local(s.kickoff):%d.%m %H:%M} {escape(s.home)} — {escape(s.away)}: "
+                     f"<b>{escape(sig_short(s))}</b>, шанс {s.p_final:.0%}, кэф {s.odds_ref:.2f}")
     return "\n".join(lines)
 
 
@@ -343,8 +355,9 @@ def signal_line(s: Signal) -> str:
         tail += f", {s.profit:+,.0f}".replace(",", " ") if s.placed else " (вы не ставили)"
     elif s.status == "void":
         tail = " → возврат"
+    fire = "🔥" if s.hot else ""
     return (
-        f"{status} #{s.id} {_sig_emoji(s)} {local(s.kickoff):%d.%m %H:%M} {escape(s.home)} — {escape(s.away)}: "
+        f"{status}{fire} #{s.id} {_sig_emoji(s)} {local(s.kickoff):%d.%m %H:%M} {escape(s.home)} — {escape(s.away)}: "
         f"<b>{escape(_sig_short(s))}</b> {bet}{tail}"
     )
 
@@ -407,7 +420,7 @@ def settle_report(settled: list[Signal], bank: float) -> str:
             label = escape(_sig_short(s))
             if s.source == "boss":
                 rank = f" {s.pick_rank}" if s.pick_rank else ""
-                line = f"   🧠 Прогноз{rank}: {label} — {mark}"
+                line = f"   🧠 Прогноз{rank}: {'🔥 ' if s.hot else ''}{label} — {mark}"
                 lines.append(line)
                 if s.status in ("won", "lost"):
                     boss_total[0] += 1
@@ -428,6 +441,9 @@ def settle_report(settled: list[Signal], bank: float) -> str:
                              f"{s.actual_odds or s.min_odds:.2f} — {mark}, {(s.profit or 0):+,.0f}".replace(",", " "))
     if boss_total[0]:
         lines += ["", f"🧠 Прогнозы босса: зашло {boss_total[1]} из {boss_total[0]}"]
+        hot = [s for s in settled if s.source == "boss" and s.hot and s.status in ("won", "lost")]
+        if hot:
+            lines.append(f"🔥 Отмеченные: зашло {sum(s.status == 'won' for s in hot)} из {len(hot)}")
     lines += [f"💰 Итог по вашим ставкам: {real_total:+,.0f}. Банк: <b>{_money(bank)}</b>".replace(",", " ")]
     if not boss_total[0]:
         lines.insert(-1, "")
@@ -468,9 +484,10 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
         parts.insert(3, "<b>Сигналы системы по видам спорта</b>\n" + "\n".join(per))
     boss = [s for s in all_time if s.source == "boss"]
     pos, neg = summarize([s for s in boss if s.positive], False), summarize([s for s in boss if not s.positive], False)
+    hot = summarize([s for s in boss if s.hot], False)
     if pos or neg:
         split = []
-        for title, sm in (("✅ с перевесом", pos), ("⚪ без перевеса", neg)):
+        for title, sm in (("🔥 отмеченные боссом", hot), ("✅ с перевесом", pos), ("⚪ без перевеса", neg)):
             split.append(f"  {title}: " + (f"{sm.won} из {sm.count}, ROI {sm.roi:+.1%}" if sm else "пока нет"))
         parts.insert(3, "<b>Прогнозы босса по типу</b>\n" + "\n".join(split))
     total = summarize(all_time, real=False)
@@ -531,7 +548,7 @@ def top_picks(top: TopPicks, bank: float) -> str:
             tag = "✅ есть перевес" if pk.positive else "⚪ без перевеса"
         lines += [
             "",
-            f"<b>{pk.rank}. {escape(ctx.short(pk.selection))}</b> — {tag}",
+            f"<b>{pk.rank}. {'🔥 ' if pk.hot else ''}{escape(ctx.short(pk.selection))}</b> — {tag}",
             f"   вероятность {pk.p:.0%} (рынок {pk.p_market:.0%}), кэф {pk.odds:.2f}, перевес {pk.edge:+.1%}",
         ]
         if by_analysis:

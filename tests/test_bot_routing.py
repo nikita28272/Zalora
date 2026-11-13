@@ -296,3 +296,34 @@ def test_financier_own_amount_with_warning():
     sig = db.signal(sid)
     assert sig.placed and sig.actual_stake == 1500 and sig.actual_odds == 2.1
     assert "больше рекомендованной" in _texts(session)[-1]
+
+
+
+def test_fire_marks_from_verdict_and_command():
+    from bot.tg.handlers import parse_fire
+
+    assert parse_fire("7 home 0.54 under 0.5 medium fire") == ("7 home 0.54 under 0.5 medium", 1)
+    assert parse_fire("7 home 0.54 under 0.5 🔥🔥") == ("7 home 0.54 under 0.5", 2)
+    assert parse_fire("7 home 0.54") == ("7 home 0.54", 0)
+
+    bot, dp, session, db, engine, ctx = _setup_with_match()
+    num = engine.save_candidate(ctx)
+    under = ctx.market.fair["under"]
+    # второй исход без перевеса, но босс поставил 🔥 на оба
+    asyncio.run(dp.feed_update(bot, _msg(f"/verdict {num} under {under:.3f} home 0.56 medium fire2")))
+    picks = {s.selection: s for s in db.boss_picks(ctx.event.event_id)}
+    assert picks["under"].hot and picks["home"].hot
+
+    # /fire снимает и ставит отметку
+    asyncio.run(dp.feed_update(bot, _msg(f"/fire {picks['under'].id}")))
+    assert not db.signal(picks["under"].id).hot and "Снял" in _texts(session)[-1]
+    asyncio.run(dp.feed_update(bot, _msg(f"/fire {picks['under'].id}")))
+    assert db.signal(picks["under"].id).hot
+
+    # в списке открытых — 🔥 наверху, в утреннем сообщении — блок «Обратить внимание»
+    asyncio.run(dp.feed_update(bot, _msg(handlers.BTN_SIGNALS)))
+    text = _texts(session)[-1]
+    assert "🔥 — босс советует" in text and "⏳🔥" in text
+    from bot.tg import formatting as fmt
+    hot = fmt.hot_block(db.hot_open())
+    assert "Обратить внимание" in hot and "Arsenal" in hot

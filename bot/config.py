@@ -107,6 +107,8 @@ class Settings:
     # только если есть матч с перекосом графика
     nba_odds_gate: bool = field(default_factory=lambda: _env("NBA_ODDS_GATE", "0") not in ("0", "false", "no"))
     # Матчи дня к разбору: сколько матчей каждого вида спорта предлагать ежедневно
+    # 🔥 автоматически: перевес по оценке босса не меньше этого (НБА «по анализу» — высокая уверенность)
+    hot_min_edge: float = field(default_factory=lambda: _float("HOT_MIN_EDGE", 0.03))
     daily_hockey: int = field(default_factory=lambda: _int("DAILY_HOCKEY", 2))
     daily_nba: int = field(default_factory=lambda: _int("DAILY_NBA", 2))
     daily_football: int = field(default_factory=lambda: _int("DAILY_FOOTBALL", 2))

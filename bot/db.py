@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS {name} (
     line REAL,
     source TEXT NOT NULL DEFAULT 'boss',
     pick_rank INTEGER,
+    hot INTEGER NOT NULL DEFAULT 0,
     UNIQUE(event_id, selection, source)
 );
 """
@@ -83,6 +84,7 @@ _MIGRATIONS = {
     "sport": "TEXT NOT NULL DEFAULT 'football'",
     "line": "REAL",
     "pick_rank": "INTEGER",
+    "hot": "INTEGER NOT NULL DEFAULT 0",
 }
 
 
@@ -119,6 +121,7 @@ class Signal:
     line: float | None = None  # линия тотала/форы
     source: str = "boss"  # boss — прогноз босса (/verdict), user — ставка владельца без вердикта
     pick_rank: int | None = None  # место в топ-2 босса по матчу (1 или 2)
+    hot: int = 0  # 🔥 — босс советует обратить внимание
 
     @property
     def placed(self) -> bool:
@@ -342,6 +345,17 @@ class DB:
             "SELECT * FROM signals WHERE event_id = ? AND source = 'boss' ORDER BY COALESCE(pick_rank, 99), id",
             (event_id,),
         )
+        return [self._row(r) for r in rows]
+
+    def set_hot(self, signal_id: int, hot: bool) -> None:
+        self.conn.execute("UPDATE signals SET hot = ? WHERE id = ?", (1 if hot else 0, signal_id))
+        self.conn.commit()
+
+    def hot_open(self, limit: int = 3) -> list[Signal]:
+        """Открытые 🔥-прогнозы (матч ещё не начался), самые вероятные первыми."""
+        rows = self.conn.execute(
+            "SELECT * FROM signals WHERE hot = 1 AND status = 'pending' AND kickoff > ? "
+            "ORDER BY p_final DESC LIMIT ?", (_now().isoformat(), limit))
         return [self._row(r) for r in rows]
 
     def delete_signals(self, ids: list[int]) -> None:

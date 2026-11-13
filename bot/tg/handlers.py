@@ -97,7 +97,8 @@ VERDICT_USAGE = (
     "Формат: <code>/verdict НОМЕР_ДОСЬЕ ИСХОД1 ВЕРОЯТНОСТЬ1 ИСХОД2 ВЕРОЯТНОСТЬ2 [УВЕРЕННОСТЬ]</code>\n"
     "Например: <code>/verdict 7 home 0.54 under 0.56 medium</code>\n"
     "Исход — код из досье: home/draw/away/over/under, в хоккее ещё ml_home/ml_away/hcp_home/hcp_away.\n"
-    "Вероятность: 0.54 или 54%. Можно и один исход."
+    "Вероятность: 0.54 или 54%. Можно и один исход.\n"
+    "🔥 в конце: <code>fire</code> — на первый исход, <code>fire2</code> — на оба."
 )
 
 
@@ -113,6 +114,20 @@ def _parse_prob(raw: str) -> float | None:
     elif p > 1:
         return None  # «1.5» — непонятно, что имелось в виду
     return p if 0 < p < 1 else None
+
+
+_FIRE = {"fire": 1, "🔥": 1, "огонь": 1, "fire2": 2, "🔥🔥": 2}
+
+
+def parse_fire(args: str) -> tuple[str, int]:
+    """Снимает из вердикта отметку 🔥: «fire» — на первый исход, «fire2» — на оба."""
+    words, n = [], 0
+    for w in args.split():
+        if w.lower() in _FIRE:
+            n = max(n, _FIRE[w.lower()])
+        else:
+            words.append(w)
+    return " ".join(words), n
 
 
 def parse_verdict(args: str) -> tuple[int, list[tuple[str, float]], str] | None:
@@ -246,6 +261,9 @@ async def send_daily(bot: Bot, chat_id: int, engine: Engine, matches, title: str
     """Матчи дня (2 хоккея, 2 НБА, 2 футбола) с кнопками; полный список — по кнопке."""
     picks = engine.daily_picks(matches)
     text = (title + "\n\n" if title else "") + fmt.daily_block(picks, len(matches))
+    hot = fmt.hot_block(engine.db.hot_open())
+    if hot:
+        text = hot + "\n\n" + text
     extra = fmt.schedule_only_block(engine.last_report)
     if extra:
         text += "\n\n" + extra
@@ -435,13 +453,14 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("verdict"))
     async def cmd_verdict(message: Message, command: CommandObject) -> None:
-        parsed = parse_verdict(command.args or "")
+        args, fire = parse_fire(command.args or "")
+        parsed = parse_verdict(args)
         if parsed is None:
             await message.answer(VERDICT_USAGE)
             return
         num, picks, conf = parsed
         try:
-            top = engine.manual_top(num, picks, conf)
+            top = engine.manual_top(num, picks, conf, hot={sel for sel, _ in picks[:fire]})
         except ValueError as exc:
             await message.answer(str(exc))
             return
@@ -466,13 +485,32 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
 
     @owner.message(Command("signals"))
     async def cmd_signals(message: Message) -> None:
-        pending = db.pending()
+        pending = sorted(db.pending(), key=lambda s: (not s.hot, s.kickoff))  # 🔥 — наверху
         if not pending:
             await message.answer("Открытых сигналов нет.")
             return
+        head = "<b>Открытые прогнозы и ставки</b>"
+        if any(s.hot for s in pending):
+            head += "\n🔥 — босс советует обратить внимание: самые вероятные и обоснованные"
         await send_long(message.bot, message.chat.id,
-                        "<b>Открытые сигналы</b>\n" + "\n".join(fmt.signal_line(s) for s in pending),
+                        head + "\n" + "\n".join(fmt.signal_line(s) for s in pending),
                         signals_keyboard(pending))
+
+    @owner.message(Command("fire"))
+    async def cmd_fire(message: Message, command: CommandObject) -> None:
+        raw = (command.args or "").strip().lstrip("#")
+        if not raw.isdigit():
+            await message.answer("Формат: <code>/fire 9</code> — поставить или снять 🔥 у прогноза #9 "
+                                 "(номер из «📌 Прогнозы и ставки»).")
+            return
+        sig = db.signal(int(raw))
+        if sig is None or sig.status != "pending":
+            await message.answer("Открытого прогноза с таким номером нет.")
+            return
+        db.set_hot(sig.id, not sig.hot)
+        await message.answer(("🔥 Отметил" if not sig.hot else "Снял 🔥 с")
+                             + f" #{sig.id} {fmt.escape(fmt.sig_short(sig))} "
+                               f"({fmt.escape(sig.home)} — {fmt.escape(sig.away)}).")
 
     @owner.message(Command("history"))
     async def cmd_history(message: Message) -> None:

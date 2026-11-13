@@ -299,6 +299,7 @@ class Pick:
     positive: bool  # перевес не меньше MIN_EDGE
     stake: float  # рекомендованная (или бумажная) сумма
     note: str  # слово финансиста
+    hot: bool = False  # 🔥
     rank: int = 0
     signal_id: int | None = None
 
@@ -892,7 +893,8 @@ class Engine:
                 raise ValueError("Матч скоро начнётся или уже идёт. Работаем только в прематче.")
             return self.save_candidate(ctx), ctx
 
-    def manual_top(self, num: int, picks: list[tuple[str, float]], confidence: str = "medium") -> TopPicks:
+    def manual_top(self, num: int, picks: list[tuple[str, float]], confidence: str = "medium",
+                   hot: set[str] | None = None) -> TopPicks:
         """Вердикт босса из чата: два лучших исхода матча -> финансист -> два прогноза в журнал.
 
         Прогнозы записываются всегда, даже без перевеса: так статистика честно покажет, как работают
@@ -990,6 +992,10 @@ class Engine:
             # для ставок с перевесом — минимальный кэф с перевесом от MIN_EDGE, для прочих — «в ноль»
             min_odds = min_acceptable_odds(p, settings.min_edge) if ev >= settings.min_edge else 1 / p
             made.append(Pick(sel, p, row.p_market, odds, ev, round(min_odds, 2), positive, stake, note))
+        hot = hot or set()
+        for pk in made:  # 🔥: отметил босс, или сильный исход по правилу
+            auto = (confidence == "high") if by_analysis else False
+            pk.hot = pk.selection in hot or (pk.positive and (auto or pk.edge >= settings.hot_min_edge))
         made.sort(key=lambda x: not x.positive)  # с перевесом — первыми
 
         self.db.delete_signals([s.id for s in old])
@@ -1017,6 +1023,7 @@ class Engine:
                 line=ctx.line(pk.selection),
                 source="boss",
                 pick_rank=rank,
+                hot=1 if pk.hot else 0,
             )
         return TopPicks(ctx=ctx, num=num, picks=made, replaced=bool(old), confidence=confidence)
 

@@ -230,7 +230,7 @@ def test_manual_flow_dossier_to_signal():
     assert rows[1].min_odds > rows[1].odds_ref  # «в ноль» только по кэфу выше рыночного
     assert rows[1].paper_odds == rows[1].odds_ref  # бумажный учёт — по кэфу из досье
     msg = fmt.top_picks(top, db.bankroll())
-    assert "1. П1</b> — ✅ есть перевес" in msg and "2. ТМ2.5</b> — ⚪ без перевеса" in msg
+    assert "1. 🔥 П1</b> — ✅ есть перевес" in msg and "2. ТМ2.5</b> — ⚪ без перевеса" in msg
 
     # повторный вердикт заменяет прежний, пока ничего не отмечено
     top2 = engine2.manual_top(n, [("home", 0.55)], "high")
@@ -345,7 +345,7 @@ def test_morning_report_groups_boss_prediction_and_user_bet():
     assert db.bankroll() == bank_before - 200  # банк меняет только ваша ставка
     report = fmt.settle_report(settled, db.bankroll())
     assert report.count("Arsenal — Chelsea") == 1  # один блок на матч
-    assert "🧠 Прогноз 1: П1 — ❌ не зашла" in report and "записано в статистику" in report
+    assert "🧠 Прогноз 1: 🔥 П1 — ❌ не зашла" in report and "записано в статистику" in report
     assert "💰 Ваша ставка: ТБ2.5" in report
     stats = fmt.stats(db.settled(), db.settled(), db.bankroll())
     assert "Прогнозы босса" in stats
