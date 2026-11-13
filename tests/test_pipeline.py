@@ -16,7 +16,7 @@ from bot.tg.handlers import chunks
 
 def _ctx(kickoff):
     ev = Event("evt-1", LEAGUES[0], kickoff, "Arsenal", "Chelsea",
-               [BookOdds("pinnacle", 2.10, 3.50, 3.70, 1.95, 1.90), BookOdds("unibet", 2.05, 3.40, 3.60, 1.90, 1.90)])
+               [BookOdds.football("pinnacle", 2.10, 3.50, 3.70, 1.95, 1.90), BookOdds.football("unibet", 2.05, 3.40, 3.60, 1.90, 1.90)])
     mv = market_view(ev)
     model = ModelOutput(1.8, 0.9, outcome_probs(1.8, 0.9), 10, 10)
     return MatchContext(1, ev, mv, model, "Arsenal FC", "Chelsea FC", home_form="WWDWW", away_form="LDLWL")

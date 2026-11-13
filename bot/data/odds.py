@@ -1,8 +1,8 @@
 """Коэффициенты букмекеров через The Odds API (https://the-odds-api.com).
 
-Бесплатный тариф: 500 кредитов в месяц. Один запрос по лиге с рынками
-h2h (1X2) и totals в регионе eu стоит 2 кредита. Полный скан шести лиг
-стоит 12 кредитов, то есть одного скана в день хватает на месяц с запасом.
+Бесплатный тариф: 500 кредитов в месяц. Стоимость запроса по лиге = число рынков
+(регион один: eu). Футбол: h2h + totals = 2 кредита на лигу. НХЛ: до 4 рынков.
+Полный скан всех лиг ~16 кредитов, поэтому линии кешируются (ODDS_CACHE_MINUTES).
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 import httpx
 
 from ..config import LEAGUES, League, settings
+from ..sports import SPORTS
 
 log = logging.getLogger(__name__)
 
@@ -22,12 +23,30 @@ BASE_URL = "https://api.the-odds-api.com/v4"
 
 @dataclass
 class BookOdds:
+    """Котировки одного букмекера: исход -> {линия: коэффициент}. Для рынков без линии ключ None."""
+
     bookmaker: str
-    home: float | None = None
-    draw: float | None = None
-    away: float | None = None
-    over25: float | None = None
-    under25: float | None = None
+    quotes: dict[str, dict[float | None, float]] = field(default_factory=dict)
+
+    def put(self, selection: str, price: float, point: float | None = None) -> None:
+        self.quotes.setdefault(selection, {})[point] = float(price)
+
+    def price(self, selection: str, point: float | None = None) -> float | None:
+        return self.quotes.get(selection, {}).get(point)
+
+    def points(self, selection: str) -> list[float]:
+        return [p for p in self.quotes.get(selection, {}) if p is not None]
+
+    @classmethod
+    def football(cls, bookmaker: str, home: float | None = None, draw: float | None = None,
+                 away: float | None = None, over25: float | None = None, under25: float | None = None) -> "BookOdds":
+        """Футбольная линия одной строкой: 1X2 и тотал 2.5 (удобно для тестов)."""
+        book = cls(bookmaker)
+        for sel, price, point in (("home", home, None), ("draw", draw, None), ("away", away, None),
+                                  ("over", over25, 2.5), ("under", under25, 2.5)):
+            if price:
+                book.put(sel, price, point)
+        return book
 
 
 @dataclass
@@ -44,7 +63,13 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _parse_event(raw: dict, league: League) -> Event:
+def _point(o: dict) -> float | None:
+    p = o.get("point")
+    return float(p) if p is not None else None
+
+
+def parse_event(raw: dict, league: League) -> Event:
+    hockey = league.sport == "hockey"
     event = Event(
         event_id=raw["id"],
         league=league,
@@ -55,22 +80,31 @@ def _parse_event(raw: dict, league: League) -> Event:
     for bm in raw.get("bookmakers", []):
         book = BookOdds(bookmaker=bm.get("key", "?"))
         for market in bm.get("markets", []):
-            if market.get("key") == "h2h":
-                for o in market.get("outcomes", []):
-                    if o["name"] == event.home_team:
-                        book.home = o["price"]
-                    elif o["name"] == event.away_team:
-                        book.away = o["price"]
-                    elif o["name"].lower() == "draw":
-                        book.draw = o["price"]
-            elif market.get("key") == "totals":
-                for o in market.get("outcomes", []):
-                    if abs(float(o.get("point", 0)) - 2.5) > 1e-9:
-                        continue
-                    if o["name"].lower() == "over":
-                        book.over25 = o["price"]
-                    elif o["name"].lower() == "under":
-                        book.under25 = o["price"]
+            key = market.get("key")
+            for o in market.get("outcomes", []):
+                name, price = o.get("name", ""), o.get("price")
+                if price is None:
+                    continue
+                side = (
+                    "home" if name == event.home_team
+                    else "away" if name == event.away_team
+                    else "draw" if name.lower() == "draw"
+                    else None
+                )
+                if key == "h2h":
+                    if hockey and side in ("home", "away"):
+                        book.put("ml_" + side, price)  # в хоккее h2h — победа с учётом ОТ
+                    elif not hockey and side:
+                        book.put(side, price)
+                elif key == "h2h_3_way" and side:
+                    book.put(side, price)  # исход основного времени
+                elif key == "totals":
+                    if name.lower() == "over":
+                        book.put("over", price, _point(o))
+                    elif name.lower() == "under":
+                        book.put("under", price, _point(o))
+                elif key == "spreads" and side in ("home", "away"):
+                    book.put("hcp_" + side, price, _point(o))
         event.books.append(book)
     return event
 
@@ -80,23 +114,32 @@ class OddsClient:
         self.api_key = api_key or settings.odds_api_key
         self.requests_remaining: str | None = None
 
-    async def fetch_league(self, client: httpx.AsyncClient, league: League, hours: int) -> list[Event]:
+    async def _get(self, client: httpx.AsyncClient, league: League, markets: str, hours: int) -> httpx.Response:
         now = datetime.now(timezone.utc)
         params = {
             "apiKey": self.api_key,
             "regions": "eu",
-            "markets": "h2h,totals",
+            "markets": markets,
             "oddsFormat": "decimal",
             "dateFormat": "iso",
             "commenceTimeFrom": _iso(now),
             "commenceTimeTo": _iso(now + timedelta(hours=hours)),
         }
-        resp = await client.get(f"{BASE_URL}/sports/{league.odds_key}/odds", params=params)
+        return await client.get(f"{BASE_URL}/sports/{league.odds_key}/odds", params=params)
+
+    async def fetch_league(self, client: httpx.AsyncClient, league: League, hours: int) -> list[Event]:
+        sport = SPORTS[league.sport]
+        resp = await self._get(client, league, sport.odds_markets, hours)
+        if resp.status_code == 422 and sport.odds_markets_fallback:
+            # API не принимает один из рынков (например, 1X2 основного времени) — берём без него
+            log.info("Odds API: %s без части рынков (HTTP 422), повторяю с %s",
+                     league.odds_key, sport.odds_markets_fallback)
+            resp = await self._get(client, league, sport.odds_markets_fallback, hours)
         if resp.status_code == 404:
             return []  # лига не в сезоне
         resp.raise_for_status()
         self.requests_remaining = resp.headers.get("x-requests-remaining", self.requests_remaining)
-        return [_parse_event(raw, league) for raw in resp.json()]
+        return [parse_event(raw, league) for raw in resp.json()]
 
     async def upcoming(self, hours: int | None = None) -> list[Event]:
         hours = hours or settings.lookahead_hours

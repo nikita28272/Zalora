@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS signals (
     profit REAL,
     paper_profit REAL,
     settled_at TEXT,
+    sport TEXT NOT NULL DEFAULT 'football',
+    line REAL,
     UNIQUE(event_id, selection)
 );
 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -72,6 +74,8 @@ _MIGRATIONS = {
     "actual_stake": "REAL",
     "decided_at": "TEXT",
     "paper_profit": "REAL",
+    "sport": "TEXT NOT NULL DEFAULT 'football'",
+    "line": "REAL",
 }
 
 
@@ -104,6 +108,8 @@ class Signal:
     profit: float | None
     paper_profit: float | None
     settled_at: str | None
+    sport: str = "football"
+    line: float | None = None  # линия тотала/форы
 
     @property
     def placed(self) -> bool:

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from html import escape
 
-from ..agents.schemas import ALL_OUTCOMES, OutcomeView
+from ..agents.schemas import OutcomeView
 from ..config import settings
 from ..db import Signal, Summary, summarize
-from ..pipeline import SEL_RU, SEL_SHORT, AnalysisResult, MatchContext, local
+from ..pipeline import AnalysisResult, MatchContext, local
+from ..sports import SPORTS, sel_short
 
 LEVEL_RU = {"low": "низкая", "medium": "средняя", "high": "высокая"}
 STANCE = {"for": "за", "against": "против", "neutral": "нейтр."}
@@ -17,7 +18,7 @@ DISCLAIMER = (
     "и даже хорошие сигналы часто проигрывают. Ставьте только деньги, которые готовы потерять."
 )
 
-HELP = f"""<b>Бот сигналов на футбол</b> (топ-5 лиг + Лига чемпионов, только прематч)
+HELP = f"""<b>Бот сигналов</b>: ⚽ топ-5 лиг и Лига чемпионов, 🏒 НХЛ. Только прематч.
 
 <b>Иерархия</b>
 👤 Вы: окончательное решение
@@ -30,7 +31,7 @@ HELP = f"""<b>Бот сигналов на футбол</b> (топ-5 лиг + �
   😈 адвокат дьявола: аргументы против
   💰 финансист: банк, размер ставки, лимиты
 
-Каждый подчинённый докладывает по каждому исходу (П1, X, П2, ТБ2.5, ТМ2.5).
+Каждый подчинённый докладывает по каждому исходу: в футболе П1, X, П2, ТБ, ТМ; в хоккее ещё победа с ОТ и фора.
 Главный не выдаёт вердикт, пока не выслушает всех.
 
 {{flow}}
@@ -82,6 +83,14 @@ def _money(x: float) -> str:
     return f"{x:,.0f}".replace(",", " ")
 
 
+def _sig_short(s: Signal) -> str:
+    return sel_short(SPORTS.get(s.sport, SPORTS["football"]), s.selection, s.line)
+
+
+def _sig_emoji(s: Signal) -> str:
+    return SPORTS.get(s.sport, SPORTS["football"]).emoji
+
+
 def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
     if not matches:
         return "Ближайших матчей с линией не найдено."
@@ -90,13 +99,12 @@ def matches_list(matches: list[MatchContext], limit: int = 30) -> str:
     for m in matches[:limit]:
         if m.event.league.name_ru != league:
             league = m.event.league.name_ru
-            lines.append(f"<b>{escape(league)}</b>")
+            lines.append(f"<b>{m.sport.emoji} {escape(league)}</b>")
         f = m.market.fair
-        mp = m.model.probs if m.model else None
-        probs = (
-            f"П1 {_pct(f['home'])}/{_pct(mp['home']) if mp else '—'} · "
-            f"X {_pct(f['draw'])}/{_pct(mp['draw']) if mp else '—'} · "
-            f"П2 {_pct(f['away'])}/{_pct(mp['away']) if mp else '—'}"
+        mp = m.model.probs if m.model else {}
+        shown = ("home", "draw", "away") if m.sport.key == "football" else ("ml_home", "ml_away", "over")
+        probs = " · ".join(
+            f"{m.short(o)} {_pct(f.get(o))}/{_pct(mp.get(o)) if mp else '—'}" for o in shown if o in f
         )
         flag = " 🔎" if m.quant_candidates() else ""
         lines.append(
@@ -118,17 +126,22 @@ def _views(items: list[OutcomeView] | None) -> dict[str, OutcomeView]:
 
 def outcome_table(res: AnalysisResult) -> str:
     """Моноширинная таблица: рынок, модель, главный, кэф и перевес по каждому исходу."""
-    rows = ["Исход  Рынок Модель Босс  Кэф  Перевес"]
-    for sel in ALL_OUTCOMES:
+    ctx = res.ctx
+    w = 6 if ctx.sport.key == "football" else 9
+    rows = [f"{'Исход':<{w + 1}}Рынок Модель Босс  Кэф   Перевес"]
+    for sel in ctx.sport.outcomes:
         r = res.table.get(sel)
         if r is None or r.p_market is None:
             continue
         mark = "▶" if res.verdict and res.verdict.selection == sel else " "
         edge_txt = f"{r.edge:+.1%}" if r.edge is not None else "—"
+        star = "*" if sel in ctx.market.estimated else " "
         rows.append(
-            f"{mark}{SEL_SHORT[sel]:<6}{_pct(r.p_market):>5} {_pct(r.p_model):>6} {_pct(r.p_final):>4} "
-            f"{(r.odds or 0):>5.2f} {edge_txt:>7}"
+            f"{mark}{ctx.short(sel):<{w}}{_pct(r.p_market):>5} {_pct(r.p_model):>6} {_pct(r.p_final):>4} "
+            f"{(r.odds or 0):>5.2f}{star}{edge_txt:>7}"
         )
+    if ctx.market.estimated:
+        rows.append("* кэф оценочный: 1X2 основного времени нет в линии, проверьте в своей БК")
     return "<pre>" + escape("\n".join(rows)) + "</pre>"
 
 
@@ -139,10 +152,10 @@ def council(res: AnalysisResult) -> str:
     devil_v = _views(res.devil.outcomes if res.devil else None)
     chief_v = {o.selection: o for o in (res.verdict.outcomes if res.verdict else [])}
     lines = ["<b>Совет по каждому исходу</b>"]
-    for sel in ALL_OUTCOMES:
+    for sel in res.ctx.sport.outcomes:
         if sel not in res.ctx.market.fair:
             continue
-        lines.append(f"<b>{SEL_SHORT[sel]}</b>")
+        lines.append(f"<b>{escape(res.ctx.short(sel))}</b>")
         if sel in news_v:
             lines.append(f"  📰 {STANCE[news_v[sel].stance]}: {escape(news_v[sel].comment)}")
         if sel in exp_v:
@@ -157,7 +170,7 @@ def council(res: AnalysisResult) -> str:
 def analysis(res: AnalysisResult) -> str:
     ctx, v = res.ctx, res.verdict
     head = (
-        f"<b>{escape(ctx.title)}</b>\n{escape(ctx.event.league.name_ru)}, "
+        f"{ctx.sport.emoji} <b>{escape(ctx.title)}</b>\n{escape(ctx.event.league.name_ru)}, "
         f"{local(ctx.event.kickoff):%d.%m %H:%M} · прематч"
     )
     out = []
@@ -165,8 +178,13 @@ def analysis(res: AnalysisResult) -> str:
         out.append(f"🟢 <b>СИГНАЛ #{res.signal_id}</b> · доклад главного аналитика")
         out.append(head)
         out.append("")
-        out.append(f"Ставка: <b>{SEL_RU[v.selection]}</b>")
-        out.append(f"Брать при коэффициенте <b>не ниже {res.min_odds:.2f}</b> (средний по рынку {res.odds_ref:.2f})")
+        out.append(f"Ставка: <b>{escape(ctx.ru(v.selection))}</b>")
+        if v.selection in ctx.market.estimated:
+            out.append(f"Брать при коэффициенте <b>не ниже {res.min_odds:.2f}</b> "
+                       f"(в линии нет этого рынка: проверьте кэф в своей БК)")
+        else:
+            out.append(f"Брать при коэффициенте <b>не ниже {res.min_odds:.2f}</b> "
+                       f"(средний по рынку {res.odds_ref:.2f})")
         out.append(
             f"💰 Финансист: <b>{_money(res.stake.stake)}</b> ({res.stake.stake_pct:.1%} банка; "
             f"{escape(res.stake.reason)})"
@@ -185,7 +203,10 @@ def analysis(res: AnalysisResult) -> str:
         out += ["", outcome_table(res)]
     if v:
         out += [f"<b>🧠 Главный аналитик:</b> {escape(v.reasoning)}"]
-        out += ["<b>За:</b>", _list(v.pros), "<b>Против:</b>", _list(v.cons)]
+        if v.pros:
+            out += ["<b>За:</b>", _list(v.pros)]
+        if v.cons:
+            out += ["<b>Против:</b>", _list(v.cons)]
 
     out.append("")
     if res.news or res.experts or res.devil:
@@ -237,8 +258,8 @@ def signal_line(s: Signal) -> str:
     elif s.status == "void":
         tail = " → возврат"
     return (
-        f"{status} #{s.id} {local(s.kickoff):%d.%m %H:%M} {escape(s.home)} — {escape(s.away)}: "
-        f"<b>{SEL_SHORT[s.selection]}</b> {bet}{tail}"
+        f"{status} #{s.id} {_sig_emoji(s)} {local(s.kickoff):%d.%m %H:%M} {escape(s.home)} — {escape(s.away)}: "
+        f"<b>{escape(_sig_short(s))}</b> {bet}{tail}"
     )
 
 
@@ -251,7 +272,7 @@ def placed_confirmation(s: Signal, bank: float, in_play: tuple[int, float]) -> s
         )
     return (
         f"🧠 Главный: принял, передал финансисту.\n"
-        f"💰 Финансист записал ставку #{s.id}: {SEL_SHORT[s.selection]} на матч {escape(s.home)} — {escape(s.away)}, "
+        f"💰 Финансист записал ставку #{s.id}: {escape(_sig_short(s))} на матч {escape(s.home)} — {escape(s.away)}, "
         f"{_money(s.actual_stake or 0)} по {s.actual_odds:.2f}.\n"
         f"Банк: {_money(bank)}. В игре: {in_play[0]} ставок на {_money(in_play[1])}.{warn}"
     )
@@ -262,12 +283,17 @@ def settle_report(settled: list[Signal], bank: float) -> str:
     real_total = 0.0
     for s in settled:
         if s.status == "void":
-            lines.append(f"↩️ #{s.id} {escape(s.home)} — {escape(s.away)}: результат не найден, сигнал закрыт без расчёта.")
+            if s.score and s.score != "нет данных":
+                lines.append(f"↩️ #{s.id} {escape(s.home)} — {escape(s.away)} {escape(s.score)}: "
+                             f"{escape(_sig_short(s))} — возврат ставки (ровно по линии).")
+            else:
+                lines.append(f"↩️ #{s.id} {escape(s.home)} — {escape(s.away)}: результат не найден, "
+                             "сигнал закрыт без расчёта.")
             continue
         outcome = "зашла ✅" if s.status == "won" else "не зашла ❌"
         lines.append(
-            f"📊 Статистик проверил исход: {escape(s.home)} — {escape(s.away)} {s.score}. "
-            f"{SEL_SHORT[s.selection]} {outcome}"
+            f"📊 Статистик проверил исход: {_sig_emoji(s)} {escape(s.home)} — {escape(s.away)} {escape(s.score or '')}. "
+            f"{escape(_sig_short(s))} {outcome}"
         )
         if s.placed:
             real_total += s.profit or 0
@@ -303,6 +329,14 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float) -> str:
     if real_m and bankroll - real_m.profit > 0:
         growth = real_m.profit / (bankroll - real_m.profit)
         parts[-1] += f" (за месяц {growth:+.1%})"
+    sports = sorted({s.sport for s in all_time if s.status in ("won", "lost")})
+    if len(sports) > 1:  # раздельно по видам спорта: видно, где система работает
+        per = []
+        for key in sports:
+            sm = summarize([s for s in all_time if s.sport == key], real=False)
+            if sm:
+                per.append(f"  {SPORTS[key].emoji} {SPORTS[key].name_ru}: {sm.count} сигн., ROI {sm.roi:+.1%}")
+        parts.insert(3, "<b>Сигналы системы по видам спорта</b>\n" + "\n".join(per))
     total = summarize(all_time, real=False)
     if total is None or total.count < 50:
         parts.append("<i>Меньше 50 рассчитанных сигналов: результат пока во многом случаен.</i>")
@@ -320,8 +354,8 @@ def candidates_message(items: list[tuple[int, MatchContext]], total: int) -> str
     for num, ctx in items:
         sel, ev = ctx.quant_candidates()[0]
         lines.append(
-            f"<b>#{num}</b> {local(ctx.event.kickoff):%d.%m %H:%M} {escape(ctx.title)}\n"
-            f"    {escape(ctx.event.league.name_ru)} · модель: {SEL_SHORT[sel]}, перевес {ev:+.1%}"
+            f"<b>#{num}</b> {ctx.sport.emoji} {local(ctx.event.kickoff):%d.%m %H:%M} {escape(ctx.title)}\n"
+            f"    {escape(ctx.event.league.name_ru)} · модель: {escape(ctx.short(sel))}, перевес {ev:+.1%}"
         )
     lines += ["", "Жмите «📋 Досье», копируйте текст и отправляйте в чат с Claude (боссу)."]
     return "\n".join(lines)

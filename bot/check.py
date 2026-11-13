@@ -13,8 +13,9 @@ import sys
 import anthropic
 import httpx
 
-from .config import settings
+from .config import LEAGUES, settings
 from .data import news
+from .data.nhl import NhlClient
 
 OK, FAIL = "✅", "❌"
 
@@ -75,6 +76,18 @@ async def check_claude() -> tuple[bool, str]:
     return True, f"доступ есть: босс {settings.llm_model_chief}, помощники {settings.llm_model_agents}"
 
 
+async def check_nhl() -> tuple[bool, str]:
+    if not any(lg.sport == "hockey" for lg in LEAGUES):
+        return True, "НХЛ выключена (ENABLED_LEAGUES)"
+    client = NhlClient()
+    rows = await client.standings()
+    games = await client.season_results()
+    if not rows or not games:
+        return False, f"данные не распознаны: команд {len(rows)}, матчей {len(games)} (хоккей пойдёт без модели)"
+    ot = sum(g.decided != "REG" for g in games)
+    return True, f"команд {len(rows)}, сыграно матчей {len(games)}, из них с ОТ/буллитами {ot}"
+
+
 async def check_rss() -> tuple[bool, str]:
     heads = await news.fetch_all()
     return (len(heads) > 0), f"заголовков: {len(heads)}"
@@ -93,7 +106,8 @@ async def main() -> int:
             except httpx.RequestError as exc:
                 ok, msg = False, f"нет связи ({type(exc).__name__})"
             results.append((title, ok, msg))
-    for title, coro in (("Claude API", check_claude()), ("Новости (RSS)", check_rss())):
+    for title, coro in (("НХЛ (статистика)", check_nhl()), ("Claude API", check_claude()),
+                        ("Новости (RSS)", check_rss())):
         try:
             ok, msg = await coro
         except Exception as exc:  # noqa: BLE001
@@ -103,7 +117,7 @@ async def main() -> int:
     print("\nПроверка бота:")
     for title, ok, msg in results:
         print(f"{OK if ok else FAIL} {title}: {msg}")
-    critical = [r for r in results if not r[1] and r[0] != "Новости (RSS)"]
+    critical = [r for r in results if not r[1] and r[0] not in ("Новости (RSS)", "НХЛ (статистика)")]
     if critical:
         print("\nИсправьте ключ командой: bash scripts/set.sh НАЗВАНИЕ ЗНАЧЕНИЕ, затем: bash scripts/check.sh")
         return 1

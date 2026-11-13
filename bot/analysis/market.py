@@ -1,19 +1,25 @@
-"""Что «думает» рынок: вероятности из коэффициентов без маржи букмекера."""
+"""Что «думает» рынок: вероятности из коэффициентов без маржи букмекера.
+
+Для каждого рынка вида спорта (1X2, тотал, фора, победа с ОТ) берём основную линию —
+ту, что предлагает больше всего букмекеров, — снимаем маржу и получаем «честные»
+вероятности. Если есть Pinnacle или биржа (самые точные линии), берём их, иначе медиану.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from statistics import mean, median
 
 from ..data.odds import BookOdds, Event
+from ..sports import SPORTS, Sport
 
 SHARP_BOOKS = ("pinnacle", "betfair_ex_eu", "matchbook")
 
-SELECTIONS_1X2 = ("home", "draw", "away")
-SELECTIONS_TOTAL = ("over", "under")
-ALL_SELECTIONS = SELECTIONS_1X2 + SELECTIONS_TOTAL
-
-_BOOK_FIELD = {"home": "home", "draw": "draw", "away": "away", "over": "over25", "under": "under25"}
+# Хоккей: доля ничьих в основное время в НХЛ — около 22–24%. Нужна, только если
+# в линии нет 1X2 основного времени и его приходится оценивать по П1/П2 с ОТ.
+NHL_REG_DRAW = 0.23
+ESTIMATED_MARGIN = 0.07  # типичная маржа букмекера на 1X2 в хоккее — для оценочного кэфа
 
 
 def devig(odds: list[float]) -> list[float]:
@@ -33,53 +39,112 @@ class MarketView:
     avg_odds: dict[str, float]  # средний коэффициент по букмекерам
     best_odds: dict[str, float]  # лучший коэффициент
     n_books: int
-    avg_margin_1x2: float | None
+    avg_margin_1x2: float | None  # маржа основного рынка
     source: str  # pinnacle / consensus
+    lines: dict[str, float] = field(default_factory=dict)  # {"total": 6.5, "hcp_home": -1.5}
+    estimated: list[str] = field(default_factory=list)  # исходы с оценочным, а не реальным кэфом
 
 
-def _books_with(books: list[BookOdds], fields: tuple[str, ...]) -> list[BookOdds]:
-    return [b for b in books if all(getattr(b, f) for f in fields)]
+def _main_line(counts: Counter, preferred: float | None, default: float) -> float | None:
+    if not counts:
+        return None
+    if preferred is not None and preferred in counts:
+        return preferred
+    top = max(counts.values())
+    return min((p for p, c in counts.items() if c == top), key=lambda p: abs(p - default))
+
+
+def _pick_lines(sport: Sport, books: list[BookOdds]) -> dict[str, float]:
+    lines: dict[str, float] = {}
+    if "over" in sport.outcomes:
+        totals = Counter(
+            p for b in books for p in b.points("over") if b.price("under", p) is not None
+        )
+        preferred = 2.5 if sport.key == "football" else None
+        line = _main_line(totals, preferred, sport.default_total)
+        if line is not None:
+            lines["total"] = line
+    if "hcp_home" in sport.outcomes:
+        hcps = Counter(
+            p for b in books for p in b.points("hcp_home") if b.price("hcp_away", -p) is not None
+        )
+        line = _main_line(hcps, None, -1.5)
+        if line is not None:
+            lines["hcp_home"] = line
+    return lines
+
+
+def _point(selection: str, lines: dict[str, float]) -> float | None:
+    if selection in ("over", "under"):
+        return lines.get("total")
+    if selection == "hcp_home":
+        return lines.get("hcp_home")
+    if selection == "hcp_away":
+        return -lines["hcp_home"] if "hcp_home" in lines else None
+    return None
 
 
 def market_view(event: Event) -> MarketView | None:
-    fields_1x2 = ("home", "draw", "away")
-    fields_tot = ("over25", "under25")
-    books_1x2 = _books_with(event.books, fields_1x2)
-    if not books_1x2:
-        return None
-    books_tot = _books_with(event.books, fields_tot)
+    sport = SPORTS[event.league.sport]
+    lines = _pick_lines(sport, event.books)
 
     fair: dict[str, float] = {}
+    avg_odds: dict[str, float] = {}
+    best_odds: dict[str, float] = {}
     source = "consensus"
+    main_books: list[BookOdds] = []
+    main_margin: float | None = None
 
-    def fair_for(books: list[BookOdds], fields: tuple[str, ...], names: tuple[str, ...]) -> dict[str, float]:
-        nonlocal source
+    for gi, group in enumerate(sport.groups):
+        if any(s in ("over", "under", "hcp_home", "hcp_away") for s in group) and not all(
+            _point(s, lines) is not None for s in group
+        ):
+            continue  # нет основной линии для тотала/форы
+        pts = {s: _point(s, lines) for s in group}
+        books = [b for b in event.books if all(b.price(s, pts[s]) for s in group)]
+        if not books:
+            continue
         sharp = [b for b in books if b.bookmaker in SHARP_BOOKS]
         if sharp:
-            source = sharp[0].bookmaker
-            probs = devig([getattr(sharp[0], f) for f in fields])
-            return dict(zip(names, probs))
-        per_book = [devig([getattr(b, f) for f in fields]) for b in books]
-        med = [median(p[i] for p in per_book) for i in range(len(fields))]
-        total = sum(med)
-        return {n: m / total for n, m in zip(names, med)}
+            probs = devig([sharp[0].price(s, pts[s]) for s in group])
+            group_source = sharp[0].bookmaker
+        else:
+            per_book = [devig([b.price(s, pts[s]) for s in group]) for b in books]
+            med = [median(p[i] for p in per_book) for i in range(len(group))]
+            total = sum(med)
+            probs = [m / total for m in med]
+            group_source = "consensus"
+        fair.update(zip(group, probs))
+        for s in group:
+            prices = [b.price(s, pts[s]) for b in books]
+            avg_odds[s] = round(mean(prices), 3)
+            best_odds[s] = max(prices)
+        if gi == 0:
+            main_books, source = books, group_source
+            main_margin = mean(margin([b.price(s, pts[s]) for s in group]) for b in books)
 
-    fair.update(fair_for(books_1x2, fields_1x2, SELECTIONS_1X2))
-    if books_tot:
-        fair.update(fair_for(books_tot, fields_tot, SELECTIONS_TOTAL))
+    if not main_books:
+        return None  # нет основного рынка (1X2 в футболе, П1/П2 с ОТ в хоккее)
 
-    avg_odds, best_odds = {}, {}
-    for sel in ALL_SELECTIONS:
-        prices = [getattr(b, _BOOK_FIELD[sel]) for b in event.books if getattr(b, _BOOK_FIELD[sel])]
-        if prices:
-            avg_odds[sel] = round(mean(prices), 3)
-            best_odds[sel] = max(prices)
+    estimated: list[str] = []
+    if sport.key == "hockey" and "home" not in fair and "ml_home" in fair:
+        # 1X2 основного времени нет в линии — оцениваем по П1/П2 с ОТ.
+        # Сильная команда чаще выигрывает и овертайм, поэтому делим ничью пропорционально.
+        d = NHL_REG_DRAW
+        fair["home"] = fair["ml_home"] * (1 - d)
+        fair["away"] = fair["ml_away"] * (1 - d)
+        fair["draw"] = d
+        for s in ("home", "draw", "away"):
+            avg_odds[s] = best_odds[s] = round(1 / (fair[s] * (1 + ESTIMATED_MARGIN)), 2)
+            estimated.append(s)
 
     return MarketView(
         fair=fair,
         avg_odds=avg_odds,
         best_odds=best_odds,
-        n_books=len(books_1x2),
-        avg_margin_1x2=mean(margin([b.home, b.draw, b.away]) for b in books_1x2),  # type: ignore[list-item]
+        n_books=len(main_books),
+        avg_margin_1x2=main_margin,
         source=source,
+        lines=lines,
+        estimated=estimated,
     )

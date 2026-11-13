@@ -1,7 +1,7 @@
 """Форматы отчётов, которые подчинённые сдают главному, и вердикт главного.
 
-Иерархия требует, чтобы каждый подчинённый высказался по КАЖДОМУ исходу:
-П1, X, П2, ТБ 2.5, ТМ 2.5.
+Иерархия требует, чтобы каждый подчинённый высказался по КАЖДОМУ исходу вида спорта
+(футбол: 5 исходов, хоккей: 9 — см. bot/sports.py).
 """
 
 from __future__ import annotations
@@ -11,10 +11,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 Level = Literal["low", "medium", "high"]
-Selection = Literal["home", "draw", "away", "over", "under"]
+Selection = Literal["home", "draw", "away", "over", "under", "ml_home", "ml_away", "hcp_home", "hcp_away"]
 Stance = Literal["for", "against", "neutral"]
 
-ALL_OUTCOMES: tuple[str, ...] = ("home", "draw", "away", "over", "under")
+ALL_OUTCOMES: tuple[str, ...] = ("home", "draw", "away", "over", "under")  # футбол (для совместимости)
 
 
 class _Strict(BaseModel):
@@ -33,7 +33,7 @@ class NewsReport(_Strict):
     key_factors: list[str] = Field(
         description="Мотивация, календарь и усталость, ротация, смена тренера, погода, конфликты"
     )
-    outcomes: list[OutcomeView] = Field(description="Мнение по каждому из пяти исходов: home, draw, away, over, under")
+    outcomes: list[OutcomeView] = Field(description="Мнение по каждому исходу из задания")
     confidence: Level
     summary: str = Field(description="2-4 предложения по-русски: что важного и как это влияет на матч")
     sources: list[str] = Field(description="URL или названия источников")
@@ -46,7 +46,7 @@ class ExpertsReport(_Strict):
         description="Самые частые прогнозы с долей, например «Победа хозяев: 5 из 8»"
     )
     outcomes: list[OutcomeView] = Field(
-        description="По каждому из пяти исходов: сколько экспертов за/против, в comment укажи долю"
+        description="По каждому исходу из задания: сколько экспертов за/против, в comment укажи долю"
     )
     notable_arguments: list[str] = Field(description="Главные аргументы экспертов")
     summary: str = Field(description="2-4 предложения по-русски")
@@ -55,7 +55,7 @@ class ExpertsReport(_Strict):
 
 class DevilReport(_Strict):
     outcomes: list[OutcomeView] = Field(
-        description="По каждому из пяти исходов: самый сильный аргумент против него (stance обычно against)"
+        description="По каждому исходу из задания: самый сильный аргумент против него (stance обычно against)"
     )
     hidden_risks: list[str] = Field(description="Что может пойти не так, чего не видно в цифрах")
     severity: Level = Field(description="Насколько серьёзны возражения против кандидата на ставку")
@@ -69,7 +69,7 @@ class ChiefOutcome(_Strict):
 
 
 class ChiefVerdict(_Strict):
-    outcomes: list[ChiefOutcome] = Field(description="Оценка КАЖДОГО из пяти исходов: home, draw, away, over, under")
+    outcomes: list[ChiefOutcome] = Field(description="Оценка КАЖДОГО исхода из задания")
     decision: Literal["bet", "skip"]
     selection: Selection = Field(description="Рекомендуемый исход. При skip — самый близкий к ставке вариант")
     confidence: Level
@@ -78,7 +78,7 @@ class ChiefVerdict(_Strict):
     cons: list[str] = Field(description="Аргументы против выбранного исхода")
 
 
-def missing_outcomes(items: list) -> list[str]:
+def missing_outcomes(items: list, required: tuple[str, ...] = ALL_OUTCOMES) -> list[str]:
     """Каких исходов не хватает в отчёте (по полю selection)."""
     present = {getattr(x, "selection", None) for x in items}
-    return [o for o in ALL_OUTCOMES if o not in present]
+    return [o for o in required if o not in present]

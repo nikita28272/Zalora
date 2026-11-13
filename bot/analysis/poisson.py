@@ -21,8 +21,9 @@ from ..data.stats import Result
 HALF_LIFE_DAYS = 120.0
 PRIOR_GAMES = 4.0  # «виртуальные» средние матчи; подобрано на симуляции сезонов (лучшая калибровка)
 MIN_GAMES = 4  # меньше — модель не строим
-MAX_GOALS = 10
+MAX_GOALS = 12
 ITERATIONS = 40
+DRAW_PRIOR_GAMES = 60  # сглаживание фактической доли ничьих к прогнозу модели
 
 
 @dataclass
@@ -36,9 +37,10 @@ class TeamStrength:
 class ModelOutput:
     lambda_home: float
     lambda_away: float
-    probs: dict[str, float]  # home/draw/away/over/under
+    probs: dict[str, float]  # вероятности исходов (набор зависит от вида спорта)
     home_games: int
     away_games: int
+    draw_boost: float = 1.0  # калибровка доли ничьих (см. PoissonModel._calibrate_draws)
 
 
 def _weight(when: datetime, now: datetime) -> float:
@@ -94,6 +96,26 @@ class PoissonModel:
         self.teams: dict[str, TeamStrength] = {
             t: TeamStrength(att[t], dfn[t], sum(w for _, w, _, _, _ in rows)) for t, rows in played.items()
         }
+        self.draw_boost = self._calibrate_draws()
+
+    def _calibrate_draws(self) -> float:
+        """Поправка на ничьи: независимый Пуассон занижает их долю (особенно в хоккее,
+        где проигрывающая команда давит, а в конце снимает вратаря). Сравниваем долю ничьих
+        в прогнозах модели с фактической долей в сезоне и масштабируем диагональ матрицы.
+        """
+        if not self.results:
+            return 1.0
+        pred = sum(
+            sum(row[i] for i, row in enumerate(_matrix(
+                self.avg_home * self.teams[r.home].attack * self.teams[r.away].defense,
+                self.avg_away * self.teams[r.away].attack * self.teams[r.home].defense,
+            )))
+            for r in self.results
+        ) / len(self.results)
+        actual = sum(r.home_goals == r.away_goals for r in self.results) / len(self.results)
+        n = len(self.results)
+        actual = (n * actual + DRAW_PRIOR_GAMES * pred) / (n + DRAW_PRIOR_GAMES)  # сглаживание
+        return min(max(actual / pred, 0.8), 1.6) if pred > 0 else 1.0
 
     def predict(self, home: str, away: str) -> ModelOutput | None:
         h, a = self.teams.get(home), self.teams.get(away)
@@ -105,7 +127,8 @@ class PoissonModel:
             return None
         lam_h = self.avg_home * h.attack * a.defense
         lam_a = self.avg_away * a.attack * h.defense
-        return ModelOutput(lam_h, lam_a, outcome_probs(lam_h, lam_a), n_home, n_away)
+        return ModelOutput(lam_h, lam_a, outcome_probs(lam_h, lam_a, draw_boost=self.draw_boost),
+                           n_home, n_away, self.draw_boost)
 
     def form(self, team: str, last: int = 5) -> str:
         """Форма в виде «WDLWW» (последние матчи справа)."""
@@ -129,27 +152,100 @@ def _pmf(lam: float, k: int) -> float:
     return math.exp(-lam) * lam**k / math.factorial(k)
 
 
-def outcome_probs(lam_h: float, lam_a: float) -> dict[str, float]:
+def _matrix(lam_h: float, lam_a: float, draw_boost: float = 1.0) -> list[list[float]]:
     ph = [_pmf(lam_h, i) for i in range(MAX_GOALS + 1)]
     pa = [_pmf(lam_a, j) for j in range(MAX_GOALS + 1)]
-    home = draw = away = under = 0.0
-    for i, p_i in enumerate(ph):
-        for j, p_j in enumerate(pa):
-            p = p_i * p_j
+    m = [[p_i * p_j * (draw_boost if i == j else 1.0) for j, p_j in enumerate(pa)] for i, p_i in enumerate(ph)]
+    total = sum(map(sum, m))
+    return [[p / total for p in row] for row in m]
+
+
+def _two_way(win: float, lose: float) -> tuple[float, float]:
+    """Вероятности при целой линии без учёта возврата (push): нормируем выигрыш и проигрыш."""
+    s = win + lose
+    return (win / s, lose / s) if s else (0.5, 0.5)
+
+
+def outcome_probs(lam_h: float, lam_a: float, total_line: float = 2.5, draw_boost: float = 1.0) -> dict[str, float]:
+    """Футбол: 1X2 и тотал."""
+    m = _matrix(lam_h, lam_a, draw_boost)
+    home = draw = away = over = under = 0.0
+    for i, row in enumerate(m):
+        for j, p in enumerate(row):
             if i > j:
                 home += p
             elif i == j:
                 draw += p
             else:
                 away += p
-            if i + j <= 2:
+            if i + j > total_line:
+                over += p
+            elif i + j < total_line:
                 under += p
-    total = home + draw + away
-    under /= total
+    over, under = _two_way(over, under)
+    return {"home": home, "draw": draw, "away": away, "over": over, "under": under}
+
+
+def hockey_probs(lam_h: float, lam_a: float, total_line: float = 5.5, hcp_home: float = -1.5,
+                 draw_boost: float = 1.0) -> dict[str, float]:
+    """Хоккей. lam_* — ожидаемые голы за основное время (60 минут).
+
+    Если основное время закончилось вничью, исход решают овертайм или буллиты: победитель
+    получает +1 гол к итоговому счёту. Шанс хозяев выиграть ОТ/буллиты берём пропорционально
+    силе атак. Тотал и фора считаются по итоговому счёту, как у букмекеров.
+    """
+    m = _matrix(lam_h, lam_a, draw_boost)
+    s_home = lam_h / (lam_h + lam_a) if lam_h + lam_a > 0 else 0.5
+    reg_home = reg_draw = reg_away = 0.0
+    over = under = 0.0
+    h_win = h_lose = 0.0  # фора хозяев
+    for i, row in enumerate(m):
+        for j, p in enumerate(row):
+            if i == j:
+                reg_draw += p
+                # ОТ/буллиты: итог (i+1):i или i:(i+1)
+                for diff, q in ((1, s_home), (-1, 1 - s_home)):
+                    tot = i + j + 1
+                    if tot > total_line:
+                        over += p * q
+                    elif tot < total_line:
+                        under += p * q
+                    margin = diff + hcp_home
+                    if margin > 0:
+                        h_win += p * q
+                    elif margin < 0:
+                        h_lose += p * q
+                continue
+            if i > j:
+                reg_home += p
+            else:
+                reg_away += p
+            if i + j > total_line:
+                over += p
+            elif i + j < total_line:
+                under += p
+            margin = (i - j) + hcp_home
+            if margin > 0:
+                h_win += p
+            elif margin < 0:
+                h_lose += p
+    over, under = _two_way(over, under)
+    hcp_h, hcp_a = _two_way(h_win, h_lose)
     return {
-        "home": home / total,
-        "draw": draw / total,
-        "away": away / total,
-        "over": 1.0 - under,
+        "ml_home": reg_home + reg_draw * s_home,
+        "ml_away": reg_away + reg_draw * (1 - s_home),
+        "home": reg_home,
+        "draw": reg_draw,
+        "away": reg_away,
+        "over": over,
         "under": under,
+        "hcp_home": hcp_h,
+        "hcp_away": hcp_a,
     }
+
+
+def sport_probs(sport_key: str, lam_h: float, lam_a: float, lines: dict[str, float],
+                draw_boost: float = 1.0) -> dict[str, float]:
+    if sport_key == "hockey":
+        return hockey_probs(lam_h, lam_a, lines.get("total", 5.5), lines.get("hcp_home", -1.5), draw_boost)
+    return outcome_probs(lam_h, lam_a, lines.get("total", 2.5), draw_boost)

@@ -31,8 +31,8 @@ def _event(books):
 
 def test_market_view_prefers_pinnacle():
     books = [
-        BookOdds("pinnacle", 2.0, 3.6, 4.0, 1.9, 1.95),
-        BookOdds("unibet", 1.8, 3.4, 4.2, 1.85, 1.9),
+        BookOdds.football("pinnacle", 2.0, 3.6, 4.0, 1.9, 1.95),
+        BookOdds.football("unibet", 1.8, 3.4, 4.2, 1.85, 1.9),
     ]
     mv = market_view(_event(books))
     assert mv.source == "pinnacle"
@@ -42,7 +42,7 @@ def test_market_view_prefers_pinnacle():
 
 
 def test_market_view_without_h2h_is_none():
-    assert market_view(_event([BookOdds("x")])) is None
+    assert market_view(_event([BookOdds.football("x")])) is None
 
 
 # ---------- модель ----------

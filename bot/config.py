@@ -13,19 +13,33 @@ load_dotenv()
 @dataclass(frozen=True)
 class League:
     odds_key: str  # ключ в The Odds API
-    fd_code: str  # код в football-data.org
+    fd_code: str  # код лиги (для футбола — код football-data.org)
     name_ru: str
+    sport: str = "football"  # football / hockey
 
 
-LEAGUES: tuple[League, ...] = (
+ALL_LEAGUES: tuple[League, ...] = (
     League("soccer_epl", "PL", "Англия. Премьер-лига"),
     League("soccer_spain_la_liga", "PD", "Испания. Ла Лига"),
     League("soccer_italy_serie_a", "SA", "Италия. Серия А"),
     League("soccer_germany_bundesliga", "BL1", "Германия. Бундеслига"),
     League("soccer_france_ligue_one", "FL1", "Франция. Лига 1"),
     League("soccer_uefa_champs_league", "CL", "Лига чемпионов"),
+    League("icehockey_nhl", "NHL", "НХЛ", sport="hockey"),
 )
-LEAGUES_BY_ODDS_KEY = {lg.odds_key: lg for lg in LEAGUES}
+
+
+def _enabled_leagues() -> tuple[League, ...]:
+    # ENABLED_LEAGUES=PL,PD,SA,BL1,FL1,CL,NHL — какие лиги сканировать (по умолчанию все)
+    raw = os.getenv("ENABLED_LEAGUES", "").strip()
+    if not raw:
+        return ALL_LEAGUES
+    codes = {c.strip().upper() for c in raw.split(",") if c.strip()}
+    return tuple(lg for lg in ALL_LEAGUES if lg.fd_code in codes)
+
+
+LEAGUES: tuple[League, ...] = _enabled_leagues()
+LEAGUES_BY_ODDS_KEY = {lg.odds_key: lg for lg in ALL_LEAGUES}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -81,6 +95,8 @@ class Settings:
     min_odds: float = field(default_factory=lambda: _float("MIN_ODDS", 1.40))
     max_odds: float = field(default_factory=lambda: _float("MAX_ODDS", 4.50))
     lookahead_hours: int = field(default_factory=lambda: _int("LOOKAHEAD_HOURS", 48))
+    # линии не перезапрашиваются чаще, чем раз в N минут: бережём бесплатные кредиты The Odds API
+    odds_cache_minutes: int = field(default_factory=lambda: _int("ODDS_CACHE_MINUTES", 30))
     # только прематч: матчи, до начала которых меньше этого времени, не разбираем
     min_minutes_before_kickoff: int = field(default_factory=lambda: _int("MIN_MINUTES_BEFORE_KICKOFF", 60))
 

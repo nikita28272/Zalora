@@ -31,8 +31,17 @@ class Result:
     utc_date: datetime
     home: str
     away: str
-    home_goals: int
+    home_goals: int  # голы в основное время (по ним учится модель)
     away_goals: int
+    final_home: int | None = None  # итоговый счёт с овертаймом/буллитами (хоккей); None = как основное
+    final_away: int | None = None
+    decided: str = "REG"  # REG / OT / SO
+
+    @property
+    def final(self) -> tuple[int, int]:
+        if self.final_home is None or self.final_away is None:
+            return self.home_goals, self.away_goals
+        return self.final_home, self.final_away
 
 
 @dataclass

@@ -76,6 +76,11 @@ _SEL_ALIASES = {
     "away": "away", "п2": "away", "2": "away", "w2": "away",
     "over": "over", "тб": "over", "тб2.5": "over", "тб2,5": "over", "o2.5": "over",
     "under": "under", "тм": "under", "тм2.5": "under", "тм2,5": "under", "u2.5": "under",
+    # хоккей
+    "ml_home": "ml_home", "п1от": "ml_home", "п1_от": "ml_home", "п1(от)": "ml_home",
+    "ml_away": "ml_away", "п2от": "ml_away", "п2_от": "ml_away", "п2(от)": "ml_away",
+    "hcp_home": "hcp_home", "ф1": "hcp_home",
+    "hcp_away": "hcp_away", "ф2": "hcp_away",
 }
 _CONF_ALIASES = {
     "low": "low", "низкая": "low", "medium": "medium", "средняя": "medium", "high": "high", "высокая": "high",
@@ -83,7 +88,8 @@ _CONF_ALIASES = {
 VERDICT_USAGE = (
     "Формат: <code>/verdict НОМЕР_ДОСЬЕ ИСХОД ВЕРОЯТНОСТЬ [УВЕРЕННОСТЬ]</code>\n"
     "Например: <code>/verdict 7 home 0.54 medium</code>\n"
-    "Исход: home/draw/away/over/under (или П1/X/П2/ТБ/ТМ). Вероятность: 0.54 или 54%."
+    "Исход — код из досье: home/draw/away/over/under, в хоккее ещё ml_home/ml_away/hcp_home/hcp_away.\n"
+    "Вероятность: 0.54 или 54%."
 )
 
 

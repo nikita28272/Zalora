@@ -3,7 +3,8 @@
 Порядок (иерархия):
   1. Статистик (код) и рынок дают цифры по каждому исходу.
   2. Главный ставит задачи подчинённым: новости и зарубежные аналитики (параллельно),
-     затем адвокат дьявола. Каждый обязан высказаться по всем пяти исходам.
+     затем адвокат дьявола. Каждый обязан высказаться по всем исходам вида спорта
+     (футбол: 1X2 и тотал; хоккей: ещё победа с ОТ и фора).
   3. Финансист докладывает состояние банка и лимиты.
   4. Только после ВСЕХ докладов главный выносит вердикт. Если кто-то не доложил даже
      после повторного задания, вердикт не выносится.
@@ -25,27 +26,61 @@ from zoneinfo import ZoneInfo
 
 from .agents import team
 from .agents.llm import AgentError, AgentRun
-from .agents.schemas import ALL_OUTCOMES, ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
+from .agents.schemas import ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport
 from .analysis.bankroll import StakeDecision, decide_stake, edge, min_acceptable_odds
 from .analysis.market import MarketView, market_view
-from .analysis.poisson import ModelOutput, PoissonModel
-from .config import LEAGUES, LEAGUES_BY_ODDS_KEY, settings
+from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
+from .config import LEAGUES_BY_ODDS_KEY, League, settings
 from .data import news
+from .data.nhl import NhlClient
 from .data.odds import Event, OddsClient
-from .data.stats import StandingRow, StatsClient
+from .data.stats import Result, StandingRow, StatsClient
 from .data.teams import best_match
 from .db import DB, Signal
+from .sports import FOOTBALL, SPORTS, Sport, group_of, line_for, sel_ru, sel_short
 
 log = logging.getLogger(__name__)
 
-SEL_RU = {
-    "home": "П1 (победа хозяев)",
-    "draw": "X (ничья)",
-    "away": "П2 (победа гостей)",
-    "over": "ТБ 2.5 (больше 2.5 голов)",
-    "under": "ТМ 2.5 (меньше 2.5 голов)",
-}
-SEL_SHORT = {"home": "П1", "draw": "X", "away": "П2", "over": "ТБ2.5", "under": "ТМ2.5"}
+# Совместимость со старым кодом и тестами: подписи футбольных исходов
+SEL_RU = {o: sel_ru(FOOTBALL, o, 2.5 if o in ("over", "under") else None) for o in FOOTBALL.outcomes}
+SEL_SHORT = {o: sel_short(FOOTBALL, o, 2.5 if o in ("over", "under") else None) for o in FOOTBALL.outcomes}
+
+
+def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result) -> str:
+    """Итог ставки по результату матча: won / lost / void (возврат при целой линии)."""
+    fh, fa = r.final  # итог с овертаймом (в футболе совпадает с основным временем)
+    rh, ra = r.home_goals, r.away_goals  # основное время
+    if selection == "home":
+        return "won" if rh > ra else "lost"
+    if selection == "draw":
+        return "won" if rh == ra else "lost"
+    if selection == "away":
+        return "won" if rh < ra else "lost"
+    if selection == "ml_home":
+        return "won" if fh > fa else "lost"
+    if selection == "ml_away":
+        return "won" if fa > fh else "lost"
+    if selection in ("over", "under"):
+        total = fh + fa
+        ln = line if line is not None else (2.5 if sport_key == "football" else 5.5)
+        if total == ln:
+            return "void"
+        return "won" if (total > ln) == (selection == "over") else "lost"
+    if selection in ("hcp_home", "hcp_away"):
+        diff = (fh - fa) if selection == "hcp_home" else (fa - fh)
+        ln = line if line is not None else -1.5
+        margin = diff + ln
+        if margin == 0:
+            return "void"
+        return "won" if margin > 0 else "lost"
+    raise ValueError(f"Неизвестный исход {selection}")
+
+
+def score_text(r: Result) -> str:
+    fh, fa = r.final
+    if r.decided in ("OT", "SO"):
+        return f"{fh}:{fa} {'ОТ' if r.decided == 'OT' else 'Б'} (осн. время {r.home_goals}:{r.away_goals})"
+    return f"{fh}:{fa}"
 
 
 def local(dt: datetime) -> datetime:
@@ -75,12 +110,25 @@ class MatchContext:
     def title(self) -> str:
         return f"{self.event.home_team} — {self.event.away_team}"
 
+    @property
+    def sport(self) -> Sport:
+        return SPORTS[self.event.league.sport]
+
+    def line(self, sel: str) -> float | None:
+        return line_for(sel, self.market.lines)
+
+    def short(self, sel: str) -> str:
+        return sel_short(self.sport, sel, self.line(sel))
+
+    def ru(self, sel: str) -> str:
+        return sel_ru(self.sport, sel, self.line(sel))
+
     def p_quant(self, sel: str) -> float | None:
         """Средняя вероятность рынка и модели — «количественная» оценка до агентов."""
         pm = self.market.fair.get(sel)
         if pm is None:
             return None
-        if self.model is None:
+        if self.model is None or sel not in self.model.probs:
             return pm
         return (pm + self.model.probs[sel]) / 2
 
@@ -90,6 +138,8 @@ class MatchContext:
             return []
         out = []
         for sel, odds in self.market.avg_odds.items():
+            if sel in self.market.estimated:  # оценочный кэф — не повод для кандидата
+                continue
             if not (settings.min_odds <= odds <= settings.max_odds):
                 continue
             p = self.p_quant(sel)
@@ -101,19 +151,25 @@ class MatchContext:
         return sorted(out, key=lambda x: x[1], reverse=True)
 
     def brief(self) -> str:
-        return (
-            f"{self.event.league.name_ru}: {self.event.home_team} (хозяева) — {self.event.away_team} (гости)\n"
+        text = (
+            f"{self.sport.emoji} {self.sport.name_ru}. {self.event.league.name_ru}: "
+            f"{self.event.home_team} (хозяева) — {self.event.away_team} (гости)\n"
             f"Начало: {local(self.event.kickoff):%d.%m.%Y %H:%M} ({settings.timezone}). Ставка — только прематч."
         )
+        if self.sport.key == "hockey":
+            text += ("\nХоккей: «П1/П2 ОТ» — победа с учётом овертайма и буллитов; «осн» — исход основного времени;"
+                     " тотал и фора — по итоговому счёту с овертаймом (победа в буллитах = +1 гол).")
+        return text
 
     def numbers(self) -> str:
         m = self.market
         lines = [f"ДОКЛАД РЫНКА ({m.n_books} букмекеров, источник честной линии: {m.source}):"]
-        for sel in ALL_OUTCOMES:
+        for sel in self.sport.outcomes:
             if sel in m.fair:
+                est = " (оценка по линии П1/П2 ОТ: 1X2 основного времени нет в линии)" if sel in m.estimated else ""
                 lines.append(
-                    f"  {SEL_SHORT[sel]}: вероятность {m.fair[sel]:.1%}, средний кэф {m.avg_odds.get(sel, 0):.2f},"
-                    f" лучший {m.best_odds.get(sel, 0):.2f}"
+                    f"  {sel} = {self.short(sel)}: вероятность {m.fair[sel]:.1%}, средний кэф "
+                    f"{m.avg_odds.get(sel, 0):.2f}, лучший {m.best_odds.get(sel, 0):.2f}{est}"
                 )
         if self.model:
             mo = self.model
@@ -121,18 +177,22 @@ class MatchContext:
                 f"ДОКЛАД СТАТИСТИКА (модель Пуассона, сезон): ожидаемые голы {mo.lambda_home:.2f} : "
                 f"{mo.lambda_away:.2f} (матчей в выборке: {mo.home_games} и {mo.away_games})"
             )
-            for sel in ALL_OUTCOMES:
-                lines.append(f"  {SEL_SHORT[sel]}: {mo.probs[sel]:.1%}")
+            for sel in self.sport.outcomes:
+                if sel in mo.probs:
+                    lines.append(f"  {self.short(sel)}: {mo.probs[sel]:.1%}")
         else:
-            lines.append("ДОКЛАД СТАТИСТИКА: недостаточно данных (например, еврокубок или начало сезона).")
+            lines.append("ДОКЛАД СТАТИСТИКА: недостаточно данных (например, еврокубок, начало сезона "
+                         "или источник статистики недоступен).")
         for name, row, form, last in (
             (self.event.home_team, self.home_row, self.home_form, self.home_last),
             (self.event.away_team, self.away_row, self.away_form, self.away_last),
         ):
             lines.append(f"{name}:")
             if row:
+                unit = "шайб" if self.sport.key == "hockey" else "мячей"
                 lines.append(
-                    f"  место {row.position}, очков {row.points} за {row.played} матчей, разница мячей {row.goal_diff:+d}"
+                    f"  место {row.position}, очков {row.points} за {row.played} матчей, разница {unit} {row.goal_diff:+d}"
+                    + (f", {row.form}" if row.form and self.sport.key == "hockey" else "")
                 )
             if form:
                 lines.append(f"  форма (старые → новые): {form}")
@@ -185,30 +245,43 @@ class Engine:
         self.db = db
         self.odds = OddsClient()
         self.stats = StatsClient()
+        self.nhl = NhlClient()
         self.matches: list[MatchContext] = []
+        self._events: tuple[float, list[Event]] = (0.0, [])
         self._headlines: tuple[float, list[news.Headline]] = (0.0, [])
         self._lock = asyncio.Lock()
 
     # ---------- данные ----------
-    async def _league_data(self, code: str) -> tuple[PoissonModel | None, list[StandingRow]]:
+    async def _league_data(self, league: League) -> tuple[PoissonModel | None, list[StandingRow]]:
         model = None
         rows: list[StandingRow] = []
+        hockey = league.sport == "hockey"
+        source = "NHL API" if hockey else "football-data"
         try:
-            results = await self.stats.season_results(code)
+            results = await (self.nhl.season_results() if hockey else self.stats.season_results(league.fd_code))
             if results:
                 model = PoissonModel(results)
         except Exception as exc:  # noqa: BLE001 — источник может быть недоступен
-            log.warning("football-data: результаты %s недоступны: %s", code, type(exc).__name__)
+            log.warning("%s: результаты %s недоступны: %s", source, league.fd_code, type(exc).__name__)
         try:
-            rows = await self.stats.standings(code)
+            rows = await (self.nhl.standings() if hockey else self.stats.standings(league.fd_code))
         except Exception as exc:  # noqa: BLE001
-            log.warning("football-data: таблица %s недоступна: %s", code, type(exc).__name__)
+            log.warning("%s: таблица %s недоступна: %s", source, league.fd_code, type(exc).__name__)
         return model, rows
 
+    async def _upcoming(self) -> list[Event]:
+        """Линии с кешем: повторные /matches и /scan не тратят кредиты The Odds API."""
+        ts, cached = self._events
+        if cached and time.monotonic() - ts < settings.odds_cache_minutes * 60:
+            return cached
+        fresh = await self.odds.upcoming()
+        self._events = (time.monotonic(), fresh)
+        return fresh
+
     async def load_matches(self) -> list[MatchContext]:
-        events = [e for e in await self.odds.upcoming() if is_prematch(e.kickoff)]
-        codes = sorted({e.league.fd_code for e in events})
-        league_data = {code: await self._league_data(code) for code in codes}
+        events = [e for e in await self._upcoming() if is_prematch(e.kickoff)]
+        leagues = {e.league.fd_code: e.league for e in events}
+        league_data = {code: await self._league_data(lg) for code, lg in sorted(leagues.items())}
 
         matches: list[MatchContext] = []
         for event in events:
@@ -222,6 +295,9 @@ class Engine:
                 ctx.fd_away = best_match(event.away_team, model.teams.keys())
                 if ctx.fd_home and ctx.fd_away and ctx.fd_home != ctx.fd_away:
                     ctx.model = model.predict(ctx.fd_home, ctx.fd_away)
+                    if ctx.model:  # вероятности под рынки и линии этого вида спорта
+                        ctx.model.probs = sport_probs(event.league.sport, ctx.model.lambda_home,
+                                                      ctx.model.lambda_away, mv.lines, ctx.model.draw_boost)
                     ctx.home_form, ctx.away_form = model.form(ctx.fd_home), model.form(ctx.fd_away)
                     ctx.home_last, ctx.away_last = model.last_results(ctx.fd_home), model.last_results(ctx.fd_away)
             if rows:
@@ -268,7 +344,7 @@ class Engine:
             sel = res.candidate
             p = ctx.p_quant(sel) or 0
             parts.append(
-                f"КАНДИДАТ ОТ КОЛИЧЕСТВЕННОГО АНАЛИЗА: {SEL_RU[sel]}, средний кэф {ctx.market.avg_odds[sel]:.2f}, "
+                f"КАНДИДАТ ОТ КОЛИЧЕСТВЕННОГО АНАЛИЗА: {ctx.ru(sel)}, средний кэф {ctx.market.avg_odds[sel]:.2f}, "
                 f"оценка вероятности (рынок+модель) {p:.1%}, ожидание {edge(p, ctx.market.avg_odds[sel]):+.1%}"
             )
         else:
@@ -307,16 +383,17 @@ class Engine:
         heads_text = "\n".join(f"- [{h.source}] {h.title}: {h.summary} ({h.link})" for h in heads)
 
         # 1. Новости и зарубежные аналитики — параллельно
-        orders = [self._order(res, "Агент новостей", lambda: team.news_agent(ctx.brief(), heads_text))]
+        sp, ln = ctx.sport, ctx.market.lines
+        orders = [self._order(res, "Агент новостей", lambda: team.news_agent(ctx.brief(), heads_text, sp, ln))]
         if settings.web_search_enabled:
-            orders.append(self._order(res, "Зарубежные аналитики", lambda: team.experts_agent(ctx.brief())))
+            orders.append(self._order(res, "Зарубежные аналитики", lambda: team.experts_agent(ctx.brief(), sp, ln)))
         reports = await asyncio.gather(*orders)
         res.news = reports[0]
         res.experts = reports[1] if len(reports) > 1 else None
 
         # 2. Адвокат дьявола видит всё собранное
         res.devil = await self._order(
-            res, "Адвокат дьявола", lambda: team.devil_agent(self._dossier(ctx, res, for_chief=False))
+            res, "Адвокат дьявола", lambda: team.devil_agent(self._dossier(ctx, res, for_chief=False), sp, ln)
         )
 
         # 3. Босс не выносит вердикт, пока не выслушал всех
@@ -330,7 +407,7 @@ class Engine:
             return res
 
         res.verdict = await self._order(
-            res, "Главный аналитик", lambda: team.chief_agent(self._dossier(ctx, res, for_chief=True))
+            res, "Главный аналитик", lambda: team.chief_agent(self._dossier(ctx, res, for_chief=True), sp, ln)
         )
         if res.verdict is None:
             res.skip_reason = "Главный аналитик не смог вынести вердикт."
@@ -344,9 +421,9 @@ class Engine:
         assert v is not None
         chief = {o.selection: o.probability for o in v.outcomes}
         final = dict(chief)
-        _normalize(final, ("home", "draw", "away"))
-        _normalize(final, ("over", "under"))
-        for sel in ALL_OUTCOMES:
+        for group in ctx.sport.groups:
+            _normalize(final, group)
+        for sel in ctx.sport.outcomes:
             pm = ctx.market.fair.get(sel)
             odds = ctx.market.avg_odds.get(sel)
             pf = final.get(sel)
@@ -357,7 +434,7 @@ class Engine:
             res.table[sel] = OutcomeRow(
                 selection=sel,
                 p_market=pm,
-                p_model=ctx.model.probs[sel] if ctx.model else None,
+                p_model=ctx.model.probs.get(sel) if ctx.model else None,
                 p_chief=chief.get(sel),
                 p_final=pf if pm is not None else None,
                 odds=odds,
@@ -414,6 +491,8 @@ class Engine:
             stake=res.stake.stake,
             confidence=v.confidence,
             reasoning=v.reasoning,
+            sport=ctx.sport.key,
+            line=ctx.line(v.selection),
         )
 
     # ---------- автоматический скан ----------
@@ -469,10 +548,11 @@ class Engine:
             "home": ctx.event.home_team,
             "away": ctx.event.away_team,
             "market": {"fair": m.fair, "avg_odds": m.avg_odds, "best_odds": m.best_odds,
-                       "n_books": m.n_books, "margin": m.avg_margin_1x2, "source": m.source},
+                       "n_books": m.n_books, "margin": m.avg_margin_1x2, "source": m.source,
+                       "lines": m.lines, "estimated": m.estimated},
             "model": None if mo is None else {
                 "lh": mo.lambda_home, "la": mo.lambda_away, "probs": mo.probs,
-                "hg": mo.home_games, "ag": mo.away_games,
+                "hg": mo.home_games, "ag": mo.away_games, "db": mo.draw_boost,
             },
             "home_row": row(ctx.home_row), "away_row": row(ctx.away_row),
             "home_form": ctx.home_form, "away_form": ctx.away_form,
@@ -484,9 +564,11 @@ class Engine:
         event = Event(snap["event_id"], LEAGUES_BY_ODDS_KEY[snap["league"]],
                       datetime.fromisoformat(snap["kickoff"]), snap["home"], snap["away"])
         mk = snap["market"]
-        market = MarketView(mk["fair"], mk["avg_odds"], mk["best_odds"], mk["n_books"], mk["margin"], mk["source"])
+        market = MarketView(mk["fair"], mk["avg_odds"], mk["best_odds"], mk["n_books"], mk["margin"], mk["source"],
+                            mk.get("lines", {}), mk.get("estimated", []))
         mo = snap["model"]
-        model = None if mo is None else ModelOutput(mo["lh"], mo["la"], mo["probs"], mo["hg"], mo["ag"])
+        model = None if mo is None else ModelOutput(mo["lh"], mo["la"], mo["probs"], mo["hg"], mo["ag"],
+                                                    mo.get("db", 1.0))
         row = lambda r: None if r is None else StandingRow(**r)  # noqa: E731
         return MatchContext(
             idx=num, event=event, market=market, model=model,
@@ -515,10 +597,11 @@ class Engine:
         return self._from_snapshot(snap, num) if snap else None
 
     def dossier(self, ctx: MatchContext, num: int) -> str:
+        codes = ", ".join(f"{o} ({ctx.short(o)})" for o in ctx.sport.outcomes if o in ctx.market.fair)
         cands = ctx.quant_candidates()
         if cands:
             sel, ev = cands[0]
-            cand = f"КАНДИДАТ ОТ МОДЕЛИ: {SEL_RU[sel]}, средний кэф {ctx.market.avg_odds[sel]:.2f}, ожидание {ev:+.1%}"
+            cand = f"КАНДИДАТ ОТ МОДЕЛИ: {sel} = {ctx.ru(sel)}, средний кэф {ctx.market.avg_odds[sel]:.2f}, ожидание {ev:+.1%}"
         else:
             cand = "КАНДИДАТ ОТ МОДЕЛИ: нет явного перевеса."
         return "\n\n".join([
@@ -531,11 +614,13 @@ class Engine:
             "1. Параллельно запусти субагентов «новости» (веб-поиск: травмы, составы, мотивация) "
             "и «зарубежные аналитики» (веб-поиск: прогнозы экспертов, доля за каждый исход), "
             "затем «адвоката дьявола» (сильнейший аргумент против каждого исхода).\n"
-            "2. Каждый докладывает по всем исходам: П1, X, П2, ТБ2.5, ТМ2.5.\n"
+            f"2. Каждый докладывает по всем исходам: {codes}.\n"
+            + ("   Хоккей: обязательно выясни стартовых вратарей.\n" if ctx.sport.key == "hockey" else "")
+            +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
             f"4. Если есть ставка с перевесом от {settings.min_edge:.0%}, последней строкой дай команду для бота:\n"
-            f"/verdict {num} <home|draw|away|over|under> <вероятность 0-1> <low|medium|high>\n"
+            f"/verdict {num} <{'|'.join(ctx.sport.outcomes)}> <вероятность 0-1> <low|medium|high>\n"
             "Если ставки нет — так и скажи, без команды.",
         ])
 
@@ -573,8 +658,11 @@ class Engine:
         fair = ctx.market.fair
         if selection not in fair:
             raise ValueError("По этому исходу нет линии букмекеров.")
-        group = ("home", "draw", "away") if selection in ("home", "draw", "away") else ("over", "under")
-        probs = {o: fair.get(o, 0.5) for o in ALL_OUTCOMES}
+        try:
+            group = group_of(ctx.sport, selection)
+        except ValueError:
+            raise ValueError(f"Для этого вида спорта нет исхода «{selection}».") from None
+        probs = {o: fair.get(o, 0.5) for o in ctx.sport.outcomes}
         rest = sum(fair[o] for o in group if o != selection)
         for o in group:
             probs[o] = probability if o == selection else fair[o] * (1 - probability) / rest
@@ -582,7 +670,7 @@ class Engine:
         cands = ctx.quant_candidates()
         res.candidate = cands[0][0] if cands else None
         res.verdict = ChiefVerdict(
-            outcomes=[ChiefOutcome(selection=o, probability=probs[o], comment="") for o in ALL_OUTCOMES],
+            outcomes=[ChiefOutcome(selection=o, probability=probs[o], comment="") for o in ctx.sport.outcomes],
             decision="bet",
             selection=selection,
             confidence=confidence,
@@ -597,22 +685,29 @@ class Engine:
     async def settle(self) -> list[Signal]:
         self.db.expire_undecided()
         now = datetime.now(timezone.utc)
-        due = [s for s in self.db.pending() if s.kickoff < now - timedelta(hours=2, minutes=15)]
+        due = [s for s in self.db.pending() if s.kickoff < now - timedelta(hours=2, minutes=45)]
         if not due:
             return []
-        codes = sorted({s.league_code for s in due} & {lg.fd_code for lg in LEAGUES})
         date_from = min(s.kickoff for s in due).date() - timedelta(days=1)
         date_to = now.date()
-        finished = []
-        start = date_from
-        while start <= date_to:  # API принимает интервал не больше 10 дней
-            end = min(start + timedelta(days=9), date_to)
-            finished.extend(await self.stats.finished_between(codes, start, end))
-            start = end + timedelta(days=1)
+        finished: list[Result] = []
+        football = sorted({s.league_code for s in due if s.sport == "football"})
+        if football:
+            start = date_from
+            while start <= date_to:  # football-data принимает интервал не больше 10 дней
+                end = min(start + timedelta(days=9), date_to)
+                finished.extend(await self.stats.finished_between(football, start, end))
+                start = end + timedelta(days=1)
+        if any(s.sport == "hockey" for s in due):
+            try:
+                finished.extend(await self.nhl.finished_between(date_from, date_to))
+            except Exception as exc:  # noqa: BLE001
+                log.warning("NHL API: результаты недоступны: %s", type(exc).__name__)
 
         settled = []
         for s in due:
-            same_day = [r for r in finished if abs((r.utc_date - s.kickoff).total_seconds()) < 36 * 3600]
+            pool = [r for r in finished if (r.competition == "NHL") == (s.sport == "hockey")]
+            same_day = [r for r in pool if abs((r.utc_date - s.kickoff).total_seconds()) < 36 * 3600]
             res = next(
                 (r for r in same_day if best_match(s.home, [r.home]) and best_match(s.away, [r.away])), None
             )
@@ -621,18 +716,15 @@ class Engine:
                     self.db.settle(s.id, "void", "нет данных", 0.0, 0.0)
                     settled.append(self.db.signal(s.id))
                 continue
-            hg, ag = res.home_goals, res.away_goals
-            won = {
-                "home": hg > ag,
-                "draw": hg == ag,
-                "away": hg < ag,
-                "over": hg + ag > 2.5,
-                "under": hg + ag < 2.5,
-            }[s.selection]
-            paper = s.stake * (s.min_odds - 1) if won else -s.stake
-            real = 0.0
-            if s.placed and s.actual_stake:
-                real = s.actual_stake * ((s.actual_odds or s.min_odds) - 1) if won else -s.actual_stake
-            self.db.settle(s.id, "won" if won else "lost", f"{hg}:{ag}", real, paper)
+            outcome = settle_outcome(s.sport, s.selection, s.line, res)
+            if outcome == "void":
+                paper = real = 0.0
+            else:
+                won = outcome == "won"
+                paper = s.stake * (s.min_odds - 1) if won else -s.stake
+                real = 0.0
+                if s.placed and s.actual_stake:
+                    real = s.actual_stake * ((s.actual_odds or s.min_odds) - 1) if won else -s.actual_stake
+            self.db.settle(s.id, outcome, score_text(res), real, paper)
             settled.append(self.db.signal(s.id))
         return [s for s in settled if s is not None]
