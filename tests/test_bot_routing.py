@@ -172,7 +172,7 @@ def test_dossier_then_top2_verdict_with_buttons_per_pick():
 
     # повторный вердикт после отметок не принимается
     asyncio.run(dp.feed_update(bot, _msg(f"/verdict {num} away 0.3")))
-    assert "уже отметили" in _texts(session)[-1]
+    assert "уже есть ставка" in _texts(session)[-1]
     assert not any(isinstance(m, EditMessageReplyMarkup) for m in session.sent)  # у тестовых кнопок разметки нет
 
 

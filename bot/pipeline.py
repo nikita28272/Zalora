@@ -759,7 +759,8 @@ class Engine:
 
         Прогнозы записываются всегда, даже без перевеса: так статистика честно покажет, как работают
         и ставки с перевесом, и «лучшие из оставшихся». Исходы с перевесом идут первыми.
-        Повторный /verdict по тому же матчу заменяет прежние прогнозы, пока вы их не отметили.
+        Повторный /verdict по тому же матчу заменяет прежние прогнозы, если по ним нет вашей ставки
+        («Не ставил» не мешает замене).
         """
         ctx = self.load_candidate(num)
         if ctx is None:
@@ -778,8 +779,15 @@ class Engine:
                 raise ValueError(f"По исходу {ctx.short(sel)} нет линии букмекеров.")
 
         old = self.db.boss_picks(ctx.event.event_id)
-        if any(s.user_decision != "pending" or s.status != "pending" for s in old):
-            raise ValueError("По этому матчу вы уже отметили прогноз босса: новый вердикт не принимаю.")
+        placed = [s for s in old if s.placed]
+        if placed:
+            names = ", ".join(ctx.short(s.selection) for s in placed)
+            raise ValueError(
+                f"По этому матчу у вас уже есть ставка ({names}): новый вердикт не принимаю, "
+                "чтобы не потерять её учёт."
+            )
+        if any(s.status != "pending" for s in old):
+            raise ValueError("Прогноз по этому матчу уже рассчитан: новый вердикт не принимаю.")
 
         # вероятности босса по всем исходам: выбранные — как сказал босс, остальные в том же рынке
         # делят остаток пропорционально рынку

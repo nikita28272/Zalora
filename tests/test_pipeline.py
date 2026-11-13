@@ -235,9 +235,14 @@ def test_manual_flow_dossier_to_signal():
     # повторный вердикт заменяет прежний, пока ничего не отмечено
     top2 = engine2.manual_top(n, [("home", 0.55)], "high")
     assert top2.replaced and [s.selection for s in db.boss_picks(ctx.event.event_id)] == ["home"]
+    # «Не ставил» замене не мешает
     db.decide(top2.picks[0].signal_id, placed=False)
-    with pytest.raises(ValueError, match="уже отметили"):
-        engine2.manual_top(n, [("away", 0.3)], "high")
+    top3 = engine2.manual_top(n, [("away", 0.3), ("over", 0.5)], "high")
+    assert top3.replaced and {s.selection for s in db.boss_picks(ctx.event.event_id)} == {"away", "over"}
+    # а сделанная ставка — мешает
+    db.decide(top3.picks[0].signal_id, placed=True, odds=3.5, stake=100)
+    with pytest.raises(ValueError, match="уже есть ставка"):
+        engine2.manual_top(n, [("home", 0.5)], "high")
 
 
 def test_manual_verdict_rejections():
