@@ -405,6 +405,7 @@ def more_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🛡 Лимиты", callback_data="menu:limits")],
         [InlineKeyboardButton(text="🔄 Проверить итоги", callback_data="menu:settle"),
          InlineKeyboardButton(text="▶️ Снять паузу", callback_data="menu:resume")],
+        [InlineKeyboardButton(text="💾 Копия базы", callback_data="menu:backup")],
         [InlineKeyboardButton(text="🤖 Расход Claude", callback_data="menu:usage"),
          InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
     ])
@@ -667,6 +668,10 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             text += "Режим: босс в чате"
         await message.answer(text.replace(",", " "))
 
+    @owner.message(Command("backup"))
+    async def cmd_backup(message: Message) -> None:
+        await run_backup(message.bot, db, message.chat.id, verbose=True)
+
     @owner.message(Command("resume"))
     async def cmd_resume(message: Message) -> None:
         from ..analysis.bankroll import risk_mode
@@ -823,7 +828,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         handlers = {
             "history": cmd_history, "limits": cmd_limits, "settle": cmd_settle,
             "resume": cmd_resume, "usage": cmd_usage, "help": cmd_help, "analyze": show_analyze,
-            "all": show_all,
+            "all": show_all, "backup": cmd_backup,
         }
         handler = handlers.get(action)
         if handler:
@@ -1138,6 +1143,31 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
     pending = db.pending()
     if pending:  # после итогов — свежий список: сыгранные ушли, остались открытые
         await send_long(bot, chat_id, fmt.signals_board(pending), signals_keyboard(pending))
+
+
+async def run_backup(bot: Bot, db: DB, chat_id: int, verbose: bool = False) -> None:
+    """Копия базы (журнал ставок, банк, настройки) файлом в чат: раз в неделю и по кнопке «💾 Копия базы»."""
+    import os
+    import tempfile
+
+    from aiogram.types import FSInputFile
+
+    path = os.path.join(tempfile.gettempdir(), f"zalora-backup-{fmt.local(fmt.now_utc()):%Y-%m-%d}.db")
+    try:
+        db.backup_to(path)
+        await bot.send_document(
+            chat_id, FSInputFile(path),
+            caption="💾 Копия базы бота: журнал ставок, статистика, банк. Храните этот файл — "
+                    "по нему всё можно восстановить, если сервер сломается.")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("backup failed")
+        if verbose:
+            await bot.send_message(chat_id, f"Копию сделать не удалось: {type(exc).__name__}")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:

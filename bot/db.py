@@ -327,12 +327,12 @@ class DB:
         ).fetchone()[0]
         streak = 0
         reset_at = self.get("streak_reset_at", "")
+        # серия — по времени матчей (итоги приходят пачкой, время расчёта у них почти одинаковое)
         for row in self.conn.execute(
             "SELECT status, settled_at FROM signals WHERE user_decision = 'placed' "
-            "AND status IN ('won','lost') ORDER BY settled_at DESC"
+            "AND status IN ('won','lost') AND settled_at > ? ORDER BY kickoff DESC, id DESC",
+            (reset_at or "",),
         ):
-            if reset_at and row["settled_at"] <= reset_at:
-                break
             if row["status"] == "lost":
                 streak += 1
             else:
@@ -354,6 +354,14 @@ class DB:
 
     def reset_week(self) -> None:
         self.set("week_reset_at", _now().isoformat())
+
+    def backup_to(self, dest: str) -> None:
+        """Целая копия базы в файл (безопасно при работающем боте)."""
+        out = sqlite3.connect(dest)
+        try:
+            self.conn.backup(out)
+        finally:
+            out.close()
 
     # ---------- сигналы ----------
     def add_signal(self, **fields) -> int | None:

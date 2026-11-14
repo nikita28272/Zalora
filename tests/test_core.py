@@ -434,7 +434,7 @@ def test_drawdown_modes_and_exposure():
     assert full.pct == cfg.max_stake_pct and "предохранитель" in full.reason  # сильный перевес — упёрлись
     assert half.pct == full.pct / 2 and half.stake == 220 and "×0.5" in half.reason
 
-    week = RiskState(10000, 0, 0, 0, peak=10000, week_profit=-1000)
+    week = RiskState(10000, 0, 0, 0, peak=10000, week_profit=-1500)  # умеренный: неделя −15%
     assert "недельный" in risk_block(week, cfg)
 
     # открытые ставки уменьшают свободный банк и лимит «в игре»
@@ -533,3 +533,41 @@ def test_signals_board_placed_first():
     assert text.index("ВАШИ СТАВКИ") < text.index("Late") < text.index("ОСТАЛЬНЫЕ") < text.index("Early")
     assert "100 × 2.00 → <b>+100</b>" in text and "в игре <b>100</b>" in text
     assert f"#{a} <b>ТБ" in text and "❔ решите" in text
+
+
+def test_financier_analysis_blocks_bad_price_and_profile_limits():
+    from bot.analysis.bankroll import RiskState, plan_bet
+    from bot.config import RISK_PROFILES
+    from bot.config import settings as cfg
+
+    st = RiskState(1000, 0, 0, 0, peak=1000)
+    ok = plan_bet(0.57, 1.80, st, cfg, by_analysis=True, confidence="medium")
+    assert ok.verdict == "ставить" and ok.stake > 0
+    low = plan_bet(0.59, 1.53, st, cfg, by_analysis=True, confidence="medium")  # кэф ниже 1.70
+    assert low.stake == 0 and "вне рабочего диапазона" in low.reason
+    minus = plan_bet(0.52, 1.75, st, cfg, by_analysis=True, confidence="medium")  # 0.52 × 1.75 − 1 = −9%
+    assert minus.stake == 0 and "в минус" in minus.reason and "в ноль — от 1.92" in minus.reason
+    slight = plan_bet(0.56, 1.75, st, cfg, by_analysis=True, confidence="medium")  # −2%: половина ставки
+    assert slight.stake > 0 and "режу вдвое" in slight.reason
+    # лимиты согласованы с размером ставки: один проигрыш максимальной ставки не закрывает день
+    for prof in RISK_PROFILES.values():
+        assert prof["day"] >= 1.5 * prof["cap"] and prof["week"] > prof["day"]
+
+
+def test_losing_streak_by_kickoff_and_backup(tmp_path):
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", home="A", away="B", odds_ref=1.8, min_odds=1.8,
+                p_market=0.5, p_model=None, edge=0.0, stake=10, confidence="medium", reasoning="r",
+                sport="basketball", p_final=0.55, selection="over")
+    # матчи по времени: проигрыш, проигрыш, выигрыш (последний); рассчитаны в обратном порядке
+    ids = [db.add_signal(event_id=f"k{i}", kickoff=(NOW + timedelta(hours=i)).isoformat(), **base) for i in range(3)]
+    for i in ids:
+        db.decide(i, True, 1.8, 10)
+    db.settle(ids[2], "won", "1:0", 8, 8)
+    db.settle(ids[1], "lost", "1:0", -10, -10)
+    db.settle(ids[0], "lost", "1:0", -10, -10)
+    assert db.risk_state().losing_streak == 0  # последний по времени матч выигран
+    dest = tmp_path / "copy.db"
+    db.backup_to(str(dest))
+    copy = DB(str(dest))
+    assert len(copy.settled()) == 3 and copy.bankroll() == db.bankroll()

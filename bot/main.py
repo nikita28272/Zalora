@@ -18,7 +18,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import settings
 from .db import DB
 from .pipeline import Engine
-from .tg.handlers import build_routers, main_keyboard, run_daily, run_late_checks, run_settle
+from .tg.handlers import build_routers, main_keyboard, run_backup, run_daily, run_late_checks, run_settle
 
 COMMANDS = [
     BotCommand(command="matches", description="Ближайшие матчи"),
@@ -37,6 +37,7 @@ COMMANDS = [
     BotCommand(command="credits", description="Остаток кредитов The Odds API"),
     BotCommand(command="usage", description="Расход на Claude API"),
     BotCommand(command="settle", description="Рассчитать итоги"),
+    BotCommand(command="backup", description="Копия базы файлом"),
     BotCommand(command="help", description="Помощь"),
 ]
 
@@ -57,6 +58,9 @@ def schedule_jobs(scheduler: AsyncIOScheduler, bot, engine, db) -> None:
         th, tm = _hm(t)
         scheduler.add_job(run_settle, CronTrigger(hour=th, minute=tm, timezone=settings.timezone),
                           args=[bot, engine, db, settings.owner_id], id=f"settle{i or ''}", **common)
+    # копия базы владельцу — каждый понедельник в 12:00
+    scheduler.add_job(run_backup, CronTrigger(day_of_week="mon", hour=12, minute=0, timezone=settings.timezone),
+                      args=[bot, db, settings.owner_id], id="backup", **common)
     if not settings.api_mode:  # напоминания о поздней проверке — только в режиме «босс в чате»
         scheduler.add_job(run_late_checks, IntervalTrigger(minutes=10), args=[bot, engine, settings.owner_id],
                           id="late", misfire_grace_time=300, coalesce=True, max_instances=1)

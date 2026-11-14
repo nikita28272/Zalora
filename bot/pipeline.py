@@ -241,6 +241,8 @@ class MatchContext:
                      " тотал и фора — по итоговому счёту с овертаймом (победа в буллитах = +1 гол).")
         if self.sport.key == "basketball":
             text += "\nБаскетбол: П1/П2, фора и тотал очков — с учётом овертайма (ничьих не бывает)."
+        if self.sport.key in ("hockey", "basketball"):
+            text += f"\nДаты ниже — по поясу {settings.timezone}: вечерняя игра в США показана следующим числом."
         return text
 
     def numbers(self) -> str:
@@ -272,6 +274,8 @@ class MatchContext:
                 lines.append(f"  Особо: {mo.note}")
         if self.factors_text:
             lines.append(self.factors_text)
+        if self.factors_text and self.model:
+            lines.append("ВЕРОЯТНОСТИ ПО МОДЕЛИ (рейтинги и усталость, без травм):")
             for sel in self.sport.outcomes:
                 if sel in mo.probs:
                     lines.append(f"  {self.short(sel)}: {mo.probs[sel]:.1%}")

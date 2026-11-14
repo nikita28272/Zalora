@@ -217,9 +217,16 @@ def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
         pct = analysis_pct(p, confidence, cfg)
         reason = (f"по анализу: уверенность {'высокая' if confidence == 'high' else 'средняя'}, "
                   f"шанс {p:.0%}")
+        if not cfg.min_odds <= odds <= cfg.max_odds:
+            return BetPlan(p, odds, ev, 0, 0, "не ставить",
+                           f"кэф {odds:.2f} вне рабочего диапазона {cfg.min_odds:.2f}–{cfg.max_odds:.2f}", need, own)
+        if ev < cfg.analysis_min_edge:
+            return BetPlan(p, odds, ev, 0, 0, "не ставить",
+                           f"при кэфе {odds:.2f} и шансе {p:.0%} ставка в минус ({ev:+.1%}); "
+                           f"в ноль — от {1 / p:.2f}", need, own)
         if ev < 0:
-            pct /= 2  # по нашей же оценке кэф мал — половина обычной ставки
-            reason += f"; кэф ниже нашей оценки (в плюс от {1 / p:.2f}) — ставку режу вдвое"
+            pct /= 2  # кэф чуть ниже нашей оценки — половина обычной ставки
+            reason += f"; кэф чуть ниже нашей оценки (в плюс от {1 / p:.2f}) — ставку режу вдвое"
         pct, notes = _scaled(state, cfg, pct, match_in_play)
         reason += "".join("; " + n for n in notes)
         stake = round_stake(state.free * pct)

@@ -45,11 +45,16 @@ LEAGUES: tuple[League, ...] = _enabled_leagues()
 LEAGUES_BY_ODDS_KEY = {lg.odds_key: lg for lg in ALL_LEAGUES}
 
 
-# Профили риска финансиста: доля Келли, предохранитель на ставку, всё в игре, один матч, база ставки НБА «по анализу»
+# Профили риска финансиста: доля Келли, предохранитель на ставку, всё в игре, один матч, база ставки НБА
+# «по анализу», а также лимиты убытка за день и неделю и пауза после серии проигрышей. Лимиты согласованы
+# с размером ставки: дневной лимит — не меньше полутора максимальных ставок, иначе один проигрыш закрывал бы день.
 RISK_PROFILES = {
-    "careful": {"kelly": 0.25, "cap": 0.02, "exposure": 0.06, "match": 0.03, "nba": 0.01},
-    "moderate": {"kelly": 0.4, "cap": 0.05, "exposure": 0.12, "match": 0.06, "nba": 0.015},
-    "aggressive": {"kelly": 0.6, "cap": 0.08, "exposure": 0.20, "match": 0.10, "nba": 0.025},
+    "careful": {"kelly": 0.25, "cap": 0.02, "exposure": 0.06, "match": 0.03, "nba": 0.01,
+                "day": 0.05, "week": 0.10, "streak": 4},
+    "moderate": {"kelly": 0.4, "cap": 0.05, "exposure": 0.12, "match": 0.06, "nba": 0.015,
+                 "day": 0.08, "week": 0.15, "streak": 5},
+    "aggressive": {"kelly": 0.6, "cap": 0.08, "exposure": 0.20, "match": 0.10, "nba": 0.025,
+                   "day": 0.12, "week": 0.20, "streak": 6},
 }
 RISK_NAMES_RU = {"careful": "осторожный", "moderate": "умеренный", "aggressive": "агрессивный"}
 
@@ -185,14 +190,16 @@ class Settings:
     dd_caution: float = field(default_factory=lambda: _float("DD_CAUTION", 0.10))  # ×0.5
     dd_defense: float = field(default_factory=lambda: _float("DD_DEFENSE", 0.20))  # ×0.25
     dd_stop: float = field(default_factory=lambda: _float("DD_STOP", 0.30))  # стоп до /resume
-    weekly_loss_limit_pct: float = field(default_factory=lambda: _float("WEEKLY_LOSS_LIMIT_PCT", 0.10))
+    weekly_loss_limit_pct: float = field(default_factory=lambda: _profiled("WEEKLY_LOSS_LIMIT_PCT", "week"))
     max_exposure_pct: float = field(default_factory=lambda: _profiled("MAX_EXPOSURE_PCT", "exposure"))  # всё в игре
     max_match_pct: float = field(default_factory=lambda: _profiled("MAX_MATCH_PCT", "match"))  # на один матч
     # сумма бумажного учёта (и потолок совета) для прогнозов босса без перевеса
     paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
+    # НБА «по анализу»: при перевесе ниже этого (по оценке босса и вашему кэфу) финансист ставить не даёт
+    analysis_min_edge: float = field(default_factory=lambda: _float("ANALYSIS_MIN_EDGE", -0.03))
     max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 0))  # 0 — без лимита
-    daily_loss_limit_pct: float = field(default_factory=lambda: _float("DAILY_LOSS_LIMIT_PCT", 0.05))
-    stop_after_losses: int = field(default_factory=lambda: _int("STOP_AFTER_LOSSES", 4))
+    daily_loss_limit_pct: float = field(default_factory=lambda: _profiled("DAILY_LOSS_LIMIT_PCT", "day"))
+    stop_after_losses: int = field(default_factory=lambda: int(_profiled("STOP_AFTER_LOSSES", "streak")))
 
     # --- расписание ---
     timezone: str = field(default_factory=lambda: _env("TIMEZONE", "Europe/Moscow"))
