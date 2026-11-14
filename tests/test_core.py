@@ -571,3 +571,27 @@ def test_losing_streak_by_kickoff_and_backup(tmp_path):
     db.backup_to(str(dest))
     copy = DB(str(dest))
     assert len(copy.settled()) == 3 and copy.bankroll() == db.bankroll()
+
+
+def test_excel_export(tmp_path):
+    from openpyxl import load_workbook
+
+    from bot.export import build_xlsx
+
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", home="Kings", away="Blazers", odds_ref=1.8, min_odds=1.8,
+                p_market=0.5, p_model=None, edge=0.0, stake=10, confidence="medium", reasoning="r",
+                sport="basketball", p_final=0.55, kickoff=NOW.isoformat())
+    a = db.add_signal(event_id="x1", selection="over", line=228.5, **base)
+    db.add_signal(event_id="x1", selection="hcp_home", line=10.5, **base)
+    db.decide(a, True, 1.87, 50)
+    db.settle(a, "won", "120:115", 43.5, 8)
+    path = tmp_path / "j.xlsx"
+    assert build_xlsx(db, str(path)) == 2
+    wb = load_workbook(path)
+    rows = list(wb["Прогнозы"].iter_rows(values_only=True))
+    assert rows[0][3] == "Матч" and len(rows) == 3
+    won = next(r for r in rows[1:] if r[0] == a)
+    assert won[4] == "ТБ228.5" and won[9] == "поставил" and won[12] == "зашло" and won[14] == 43.5
+    weeks = list(wb["По неделям"].iter_rows(values_only=True))
+    assert weeks[1][1] == 1 and weeks[1][6] == 43.5

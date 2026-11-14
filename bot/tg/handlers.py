@@ -405,7 +405,8 @@ def more_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="🛡 Лимиты", callback_data="menu:limits")],
         [InlineKeyboardButton(text="🔄 Проверить итоги", callback_data="menu:settle"),
          InlineKeyboardButton(text="▶️ Снять паузу", callback_data="menu:resume")],
-        [InlineKeyboardButton(text="💾 Копия базы", callback_data="menu:backup")],
+        [InlineKeyboardButton(text="📄 Выгрузка в Excel", callback_data="menu:excel"),
+         InlineKeyboardButton(text="💾 Копия базы", callback_data="menu:backup")],
         [InlineKeyboardButton(text="🤖 Расход Claude", callback_data="menu:usage"),
          InlineKeyboardButton(text="❓ Помощь", callback_data="menu:help")],
     ])
@@ -668,6 +669,10 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             text += "Режим: босс в чате"
         await message.answer(text.replace(",", " "))
 
+    @owner.message(Command("excel"))
+    async def cmd_excel(message: Message) -> None:
+        await run_excel(message.bot, db, message.chat.id)
+
     @owner.message(Command("backup"))
     async def cmd_backup(message: Message) -> None:
         await run_backup(message.bot, db, message.chat.id, verbose=True)
@@ -828,7 +833,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         handlers = {
             "history": cmd_history, "limits": cmd_limits, "settle": cmd_settle,
             "resume": cmd_resume, "usage": cmd_usage, "help": cmd_help, "analyze": show_analyze,
-            "all": show_all, "backup": cmd_backup,
+            "all": show_all, "backup": cmd_backup, "excel": cmd_excel,
         }
         handler = handlers.get(action)
         if handler:
@@ -1143,6 +1148,32 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
     pending = db.pending()
     if pending:  # после итогов — свежий список: сыгранные ушли, остались открытые
         await send_long(bot, chat_id, fmt.signals_board(pending), signals_keyboard(pending))
+
+
+async def run_excel(bot: Bot, db: DB, chat_id: int) -> None:
+    """Журнал прогнозов и ставок таблицей Excel — открывается на телефоне."""
+    import os
+    import tempfile
+
+    from aiogram.types import FSInputFile
+
+    from ..export import build_xlsx
+
+    path = os.path.join(tempfile.gettempdir(), f"zalora-{fmt.local(fmt.now_utc()):%Y-%m-%d}.xlsx")
+    try:
+        n = build_xlsx(db, path)
+        await bot.send_document(
+            chat_id, FSInputFile(path),
+            caption=f"📄 Журнал: {n} прогнозов и ставок. Лист «Прогнозы» — все исходы (новые сверху, "
+                    "зелёные — зашли, красные — нет), лист «По неделям» — проход и ROI.")
+    except Exception as exc:  # noqa: BLE001
+        log.exception("excel export failed")
+        await bot.send_message(chat_id, f"Выгрузка не удалась: {type(exc).__name__}")
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 async def run_backup(bot: Bot, db: DB, chat_id: int, verbose: bool = False) -> None:

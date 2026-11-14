@@ -37,6 +37,7 @@ COMMANDS = [
     BotCommand(command="credits", description="Остаток кредитов The Odds API"),
     BotCommand(command="usage", description="Расход на Claude API"),
     BotCommand(command="settle", description="Рассчитать итоги"),
+    BotCommand(command="excel", description="Журнал ставок в Excel"),
     BotCommand(command="backup", description="Копия базы файлом"),
     BotCommand(command="help", description="Помощь"),
 ]
