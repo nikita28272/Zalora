@@ -57,6 +57,16 @@ async def send_long(bot: Bot, chat_id: int, text: str, keyboard: InlineKeyboardM
         await bot.send_message(chat_id, part, disable_web_page_preview=True, reply_markup=markup)
 
 
+async def send_dossier(bot: Bot, chat_id: int, text: str) -> None:
+    """Досье или проверка в блоках «Копировать»; длинное — частями с подсказкой."""
+    parts = fmt.dossier_parts(text)
+    if len(parts) > 1:
+        await bot.send_message(chat_id, f"📋 Досье длинное — пришлю {len(parts)} частями. "
+                                        "Скопируйте все части подряд в одно сообщение для Claude.")
+    for part in parts:
+        await bot.send_message(chat_id, part)
+
+
 async def send_analysis(bot: Bot, chat_id: int, res: AnalysisResult) -> None:
     kb = decision_keyboard(res.signal_id) if res.signal_id else None
     await send_long(bot, chat_id, fmt.analysis(res), kb)
@@ -505,10 +515,15 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if not settings.api_mode:
             try:
                 num, ctx = await engine.dossier_by_index(idx)
+                text = engine.dossier(ctx, num)
             except ValueError as exc:
                 await message.answer(str(exc))
                 return
-            await message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
+            except Exception as exc:  # noqa: BLE001
+                log.exception("dossier failed")
+                await message.answer(f"Не удалось собрать досье: {type(exc).__name__}. Напишите Claude — разберёмся.")
+                return
+            await send_dossier(message.bot, message.chat.id, text)
             await message.answer(fmt.DOSSIER_HINT)
             return
         await message.answer("Агенты работают: новости, эксперты, адвокат дьявола, главный аналитик. Это 1–3 минуты…")
@@ -562,7 +577,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         except ValueError as exc:
             await message.answer(str(exc))
             return
-        await message.answer(fmt.dossier_message(text))
+        await send_dossier(message.bot, message.chat.id, text)
         await message.answer(fmt.LATE_HINT)
 
     @owner.message(Command("check"))
@@ -767,7 +782,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             await cb.answer("Досье устарело. Запросите новое: /scan", show_alert=True)
             return
         await cb.answer()
-        await cb.message.answer(fmt.dossier_message(engine.dossier(ctx, num)))
+        await send_dossier(cb.bot, cb.message.chat.id, engine.dossier(ctx, num))
         await cb.message.answer(fmt.DOSSIER_HINT)
 
     # ---------- кнопки постоянного меню ----------
@@ -1275,4 +1290,4 @@ async def run_late_checks(bot: Bot, engine: Engine, chat_id: int) -> None:
         if any(s.user_decision == "pending" for s in picks):
             head += "\n❔ Есть прогноз без отметки: проверьте и решите — «Сделал» или «Не ставил»."
         await bot.send_message(chat_id, head + "\nСкопируйте блок ниже в чат с Claude.")
-        await bot.send_message(chat_id, fmt.dossier_message(text))
+        await send_dossier(bot, chat_id, text)

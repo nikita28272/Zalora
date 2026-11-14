@@ -815,6 +815,42 @@ def dossier_message(text: str) -> str:
     return '<pre><code class="language-dossier">' + escape(text) + "</code></pre>"
 
 
+DOSSIER_LIMIT = 3900  # Telegram принимает до 4096 знаков в сообщении (с разметкой)
+
+
+def dossier_parts(text: str) -> list[str]:
+    """Досье для отправки: одним блоком, а если не влезает в лимит Telegram — несколькими по абзацам.
+    Каждая часть — отдельный блок с кнопкой «Копировать»."""
+    if len(dossier_message(text)) <= DOSSIER_LIMIT:
+        return [dossier_message(text)]
+    chunks, cur = [], ""
+    for para in text.split("\n\n"):
+        cand = f"{cur}\n\n{para}" if cur else para
+        if cur and len(dossier_message(cand)) > DOSSIER_LIMIT - 60:
+            chunks.append(cur)
+            cur = para
+        else:
+            cur = cand
+    if cur:
+        chunks.append(cur)
+    # абзац сам по себе длиннее лимита — режем по строкам
+    out = []
+    for ch in chunks:
+        while len(dossier_message(ch)) > DOSSIER_LIMIT - 60:
+            lines, head = ch.split("\n"), ""
+            for i, ln in enumerate(lines):
+                if len(dossier_message(head + "\n" + ln)) > DOSSIER_LIMIT - 60 and head:
+                    out.append(head)
+                    ch = "\n".join(lines[i:])
+                    break
+                head = f"{head}\n{ln}" if head else ln
+            else:
+                break
+        out.append(ch)
+    n = len(out)
+    return [dossier_message(f"[часть {i}/{n}]\n{part}") for i, part in enumerate(out, 1)]
+
+
 DOSSIER_HINT = (
     "☝️ Нажмите «Копировать» в правом верхнем углу блока выше, затем вставьте текст в чат с Claude.\n"
     "Босс назовёт 2 лучших исхода. Строку <code>/verdict …</code> из его ответа отправьте сюда — "

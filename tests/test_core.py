@@ -611,3 +611,18 @@ def test_paper_roi_is_flat_per_pick():
         db.settle(sid, "won" if won else "lost", "1:0", 0, 4 if won else -60)  # старый учёт: −160
     sm = summarize(db.settled(), real=False)
     assert sm.staked == 800 and round(sm.profit) == 100 and round(sm.roi, 3) == 0.125
+
+
+def test_long_dossier_is_split_into_copyable_parts():
+    from bot.tg import formatting as fmt
+
+    short = "ДОСЬЕ #1 ДЛЯ БОССА\n\nкоротко"
+    assert fmt.dossier_parts(short) == [fmt.dossier_message(short)]
+    para = "\n".join(f"строка {i} <исход> & данные" for i in range(60))
+    long = "ДОСЬЕ #2 ДЛЯ БОССА\n\n" + "\n\n".join([para] * 4)
+    parts = fmt.dossier_parts(long)
+    assert len(parts) >= 2 and all(len(p) <= 4096 for p in parts)
+    assert parts[0].startswith('<pre><code class="language-dossier">[часть 1/')
+    # все строки на месте и по порядку
+    joined = "".join(parts)
+    assert joined.count("строка 59") == 4 and "&lt;исход&gt;" in joined
