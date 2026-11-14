@@ -423,7 +423,13 @@ def test_daily_picks_fixed_for_the_day():
 
     db = DB(":memory:")
     engine = Engine(db)
-    now = NOW
+    # начало игрового дня (сразу после DAILY_ROLLOVER_HOUR): +3 часа гарантированно в том же дне
+    from zoneinfo import ZoneInfo
+    from bot.config import settings
+    tz = ZoneInfo(settings.timezone)
+    start = (NOW.astimezone(tz) + timedelta(days=1)).replace(hour=settings.daily_rollover_hour, minute=5,
+                                                             second=0, microsecond=0)
+    now = start.astimezone(timezone.utc)
     hockey = []
     for i in range(4):
         c = hockey_ctx(now + timedelta(hours=10 + i))

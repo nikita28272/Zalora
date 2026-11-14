@@ -274,11 +274,13 @@ class MatchContext:
                 lines.append(f"  Особо: {mo.note}")
         if self.factors_text:
             lines.append(self.factors_text)
-        if self.factors_text and self.model:
-            lines.append("ВЕРОЯТНОСТИ ПО МОДЕЛИ (рейтинги и усталость, без травм):")
-            for sel in self.sport.outcomes:
-                if sel in mo.probs:
-                    lines.append(f"  {self.short(sel)}: {mo.probs[sel]:.1%}")
+        if self.model:
+            what = "рейтинги и усталость" if self.sport.key == "basketball" else "модель по голам"
+            probs = [f"  {self.short(sel)}: {self.model.probs[sel]:.1%}"
+                     for sel in self.sport.outcomes if sel in self.model.probs]
+            if probs:
+                lines.append(f"ВЕРОЯТНОСТИ ПО МОДЕЛИ ({what}, без травм и новостей):")
+                lines += probs
         else:
             lines.append("ДОКЛАД СТАТИСТИКА: недостаточно данных (например, еврокубок, начало сезона "
                          "или источник статистики недоступен).")

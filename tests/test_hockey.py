@@ -247,3 +247,16 @@ def test_football_previous_season(monkeypatch):
     rows = asyncio.run(stats_mod.StatsClient().results_with_previous("PL"))
     assert seasons[0] is None and seasons[1] == stats_mod.football_season_start(NOW.date()).year - 1
     assert len(rows) == 1  # без прошлого сезона бот продолжает работать
+
+
+def test_hockey_dossier_model_block_consistent():
+    from bot.analysis.poisson import ModelOutput
+
+    ctx = _ctx(NOW + timedelta(days=1))
+    assert ctx.model is None
+    assert "недостаточно данных" in ctx.numbers()
+    ctx.model = ModelOutput(3.66, 2.55, {"ml_home": 0.70, "ml_away": 0.30, "over": 0.59, "under": 0.41},
+                            108, 102)
+    text = ctx.numbers()
+    assert "модель Пуассона" in text and "недостаточно данных" not in text
+    assert "ВЕРОЯТНОСТИ ПО МОДЕЛИ (модель по голам" in text and "П1 ОТ: 70.0%" in text and ": 59.0%" in text
