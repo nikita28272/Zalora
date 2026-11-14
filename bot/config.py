@@ -144,6 +144,9 @@ class Settings:
     daily_hockey: int = field(default_factory=lambda: _int("DAILY_HOCKEY", 2))
     daily_nba: int = field(default_factory=lambda: _int("DAILY_NBA", 2))
     daily_football: int = field(default_factory=lambda: _int("DAILY_FOOTBALL", 2))
+    # «игровой день» для набора матчей дня: с этого часа (по TIMEZONE) до него же следующего дня набор не меняется.
+    # 13 — после утренних игр НХЛ/НБА (по Новосибирску), до следующей ночи
+    daily_rollover_hour: int = field(default_factory=lambda: _int("DAILY_ROLLOVER_HOUR", 13))
     daily_window_hours: int = field(default_factory=lambda: _int("DAILY_WINDOW_HOURS", 30))  # «ближайшие сутки»
     nba_top: int = field(default_factory=lambda: _int("NBA_TOP", 3))  # сколько матчей НБА в день предлагать
     nba_min_factor: float = field(default_factory=lambda: _float("NBA_MIN_FACTOR", 2.0))  # порог перекоса графика

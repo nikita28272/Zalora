@@ -1117,28 +1117,61 @@ class Engine:
         scored.sort(key=lambda x: x[2], reverse=True)
         return scored[:settings.top_matches]
 
+    @staticmethod
+    def slate_key(now: datetime) -> str:
+        """Игровой день: с DAILY_ROLLOVER_HOUR (по TIMEZONE) до того же часа следующих суток."""
+        return (local(now) - timedelta(hours=settings.daily_rollover_hour)).date().isoformat()
+
     def daily_picks(self, matches: list[MatchContext] | None = None,
                     now: datetime | None = None) -> list[tuple[MatchContext, str]]:
         """Матчи дня к разбору: DAILY_HOCKEY хоккея, DAILY_NBA баскетбола, DAILY_FOOTBALL футбола.
 
-        Хоккей и футбол — где лучший исход по модели и рынку ближе всего к перевесу; НБА — с самым
-        сильным перекосом графика. Сначала матчи ближайших DAILY_WINDOW_HOURS часов (чтобы завтрашние
-        не дублировались), если их не хватает — дальше. Уже разобранные и начавшиеся пропускаем.
+        Набор выбирается ОДИН раз на игровой день и дальше не меняется (повторное «📅 Матчи» показывает
+        те же матчи; разобранные — с пометкой ✅). Внутри вида спорта: сначала с перевесом
+        (хоккей/футбол — модель и рынок видят перевес, НБА — сильный перекос графика), затем самые
+        вероятные (шанс лучшего исхода с кэфом MIN_ODDS–MAX_ODDS). Матчи ближайших DAILY_WINDOW_HOURS
+        часов — в приоритете. Начавшиеся не показываются.
         """
         now = now or datetime.now(timezone.utc)
+        pool_all = {m.event.event_id: m for m in (self.matches if matches is None else matches)}
         done = self.analyzed_events()
-        pool = [m for m in (self.matches if matches is None else matches)
-                if m.event.event_id not in done and is_prematch(m.event.kickoff)]
+        key = f"daily_set:{self.slate_key(now)}"
+        stored = self.db.get(key) or []
+        if stored:
+            out = []
+            for eid in stored:
+                m = pool_all.get(eid)
+                if m is None or not is_prematch(m.event.kickoff):
+                    continue
+                _, why = self._daily_score(m)
+                out.append((m, ("✅ разобран · " if eid in done else "") + why))
+            return out
+        pool = [m for m in pool_all.values() if m.event.event_id not in done and is_prematch(m.event.kickoff)]
         soon = now + timedelta(hours=settings.daily_window_hours)
         quota = {"hockey": settings.daily_hockey, "basketball": settings.daily_nba,
                  "football": settings.daily_football}
         out: list[tuple[MatchContext, str]] = []
         for sport in ("hockey", "basketball", "football"):
             cands = [m for m in pool if m.sport.key == sport]
-            scored = [(self._daily_score(m), m) for m in cands]
-            scored.sort(key=lambda x: (x[1].event.kickoff > soon, -x[0][0]))
-            out += [(m, why) for (_, why), m in scored[:quota[sport]]]
+            ranked = []
+            for m in cands:
+                score, why = self._daily_score(m)
+                opts = safe_options(m)
+                prob = opts[0].p if opts else 0.0
+                ranked.append(((m.event.kickoff > soon, not self._has_edge(m, score), -prob, -score), m, why))
+            ranked.sort(key=lambda x: x[0])
+            out += [(m, ("⭐ перевес · " if self._has_edge(m, self._daily_score(m)[0]) else "") + why)
+                    for _, m, why in ranked[:quota[sport]]]
+        if out:
+            self.db.set(key, [m.event.event_id for m, _ in out])
         return out
+
+    @staticmethod
+    def _has_edge(m: MatchContext, score: float) -> bool:
+        """«С перевесом»: НБА — сильный перекос графика; остальное — модель и рынок видят перевес."""
+        if m.sport.key == "basketball" and settings.nba_mode == "analysis":
+            return bool(m.factors and m.factors.side != "—" and m.factors.score >= settings.nba_min_factor)
+        return score >= settings.min_edge
 
     @staticmethod
     def _daily_score(m: MatchContext) -> tuple[float, str]:

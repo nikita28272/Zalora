@@ -414,3 +414,28 @@ def test_double_chance_football():
     num = engine.save_candidate(ctx)
     top = engine.manual_top(num, [("dc_home", 0.72)], "medium")
     assert top.picks[0].estimated and "1X" in fmt.top_picks(top, db.bankroll())
+
+
+def test_daily_picks_fixed_for_the_day():
+    import sys
+    sys.path.insert(0, "tests")
+    from test_hockey import _ctx as hockey_ctx
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    now = NOW
+    hockey = []
+    for i in range(4):
+        c = hockey_ctx(now + timedelta(hours=10 + i))
+        c.idx, c.event.event_id = i + 1, f"h{i}"
+        hockey.append(c)
+    first = [m.event.event_id for m, _ in engine.daily_picks(hockey, now=now)]
+    assert len(first) == 2
+    # разобрали первый матч, линия обновилась, прошло 3 часа — набор тот же, разобранный помечен
+    num = engine.save_candidate(next(m for m in hockey if m.event.event_id == first[0]))
+    engine.manual_top(num, [("ml_home", 0.55), ("over", 0.5)], "medium")
+    again = engine.daily_picks(list(reversed(hockey)), now=now + timedelta(hours=3))
+    assert [m.event.event_id for m, _ in again] == first and again[0][1].startswith("✅ разобран")
+    # следующий игровой день — новый набор
+    nxt = engine.daily_picks(hockey, now=now + timedelta(days=1))
+    assert first[0] not in [m.event.event_id for m, _ in nxt]
