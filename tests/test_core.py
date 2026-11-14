@@ -595,3 +595,19 @@ def test_excel_export(tmp_path):
     assert won[4] == "ТБ228.5" and won[9] == "поставил" and won[12] == "зашло" and won[14] == 43.5
     weeks = list(wb["По неделям"].iter_rows(values_only=True))
     assert weeks[1][1] == 1 and weeks[1][6] == 43.5
+
+
+def test_paper_roi_is_flat_per_pick():
+    """5 из 8 по кэфу 1.80 — это плюс, сколько бы ни советовал финансист на каждый прогноз."""
+    from bot.db import summarize
+
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", home="A", away="B", odds_ref=1.8, min_odds=1.8,
+                p_market=0.5, p_model=None, edge=0.0, confidence="medium", reasoning="r",
+                sport="basketball", p_final=0.55, kickoff=NOW.isoformat(), selection="over")
+    for i in range(8):
+        won = i < 5
+        sid = db.add_signal(event_id=f"f{i}", stake=5 if won else 60, **base)  # советы разного размера
+        db.settle(sid, "won" if won else "lost", "1:0", 0, 4 if won else -60)  # старый учёт: −160
+    sm = summarize(db.settled(), real=False)
+    assert sm.staked == 800 and round(sm.profit) == 100 and round(sm.roi, 3) == 0.125

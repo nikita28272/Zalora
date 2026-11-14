@@ -42,7 +42,7 @@ def _style_header(ws, widths: list[int]) -> None:
 
 def _picks_sheet(ws, rows: list[Signal]) -> None:
     head = ["№", "Дата", "Спорт", "Матч", "Исход", "Шанс босса", "Уверенность", "🔥", "Кэф из досье",
-            "Решение", "Ваш кэф", "Ваша сумма", "Результат", "Счёт", "Прибыль (ваша)", "Прибыль (на бумаге)"]
+            "Решение", "Ваш кэф", "Ваша сумма", "Результат", "Счёт", "Прибыль (ваша)", "На бумаге (по 100)"]
     ws.append(head)
     for s in rows:
         sport = SPORTS.get(s.sport, SPORTS["football"])
@@ -53,7 +53,7 @@ def _picks_sheet(ws, rows: list[Signal]) -> None:
             s.actual_odds if s.placed else None, s.actual_stake if s.placed else None,
             STATUS_RU.get(s.status, s.status), s.score or "",
             s.profit if s.placed and s.status != "pending" else None,
-            s.paper_profit if s.status != "pending" else None,
+            s.paper_flat if s.status != "pending" else None,
         ])
         fill = {"won": GREEN, "lost": RED, "void": GREY}.get(s.status)
         if fill:

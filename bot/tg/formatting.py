@@ -590,7 +590,7 @@ def settle_report(settled: list[Signal], bank: float) -> str:
                     boss_total[1] += s.status == "won"
                     lines.append(
                         f"      босс {s.p_final:.0%}, кэф {s.odds_ref:.2f}, "
-                        f"{'с перевесом' if s.positive else 'без перевеса'}; на бумаге {s.paper_profit:+,.0f}"
+                        f"{'с перевесом' if s.positive else 'без перевеса'}; на бумаге {s.paper_flat:+,.0f} из 100"
                         .replace(",", " "))
                 if s.placed:
                     real_total += s.profit or 0
@@ -637,7 +637,7 @@ def roi_block(week: list[Signal], month: list[Signal]) -> str:
     """ROI всех прогнозов босса (поставленных и нет) за текущую неделю и месяц."""
     now = datetime.now(ZoneInfo(settings.timezone))
     monday = now - timedelta(days=now.weekday())
-    return ("📅 <b>ROI прогнозов босса</b> (все исходы, прошедшие анализ, на бумаге)\n"
+    return ("📅 <b>ROI прогнозов босса</b> (все исходы, прошедшие анализ; на бумаге — по 100 на каждый)\n"
             + _roi_line(f"неделя с {monday:%d.%m}", summarize(week, real=False)) + "\n"
             + _roi_line(f"месяц с 01.{now:%m}", summarize(month, real=False)) + "\n"
             + _roi_line("ваши ставки за неделю", summarize(week, real=True)) + "\n"

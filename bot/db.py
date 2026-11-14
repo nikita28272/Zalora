@@ -139,6 +139,16 @@ class Signal:
         return self.edge >= settings.min_edge - 1e-9
 
     @property
+    def paper_flat(self) -> float:
+        """Бумажный итог прогноза при одинаковой ставке PAPER_UNIT на каждый прогноз (0 — не рассчитан/возврат).
+        Одинаковая ставка — чтобы ROI на бумаге показывал качество прогнозов, а не размер советов финансиста."""
+        if self.status == "won":
+            return round(PAPER_UNIT * (self.paper_odds - 1), 2)
+        if self.status == "lost":
+            return -PAPER_UNIT
+        return 0.0
+
+    @property
     def paper_odds(self) -> float:
         """Кэф бумажного учёта: минимальный для ставок с перевесом, средний из досье для остальных
         (и для НБА «по анализу» — там минимальный кэф не считается)."""
@@ -160,6 +170,9 @@ class Summary:
     @property
     def roi(self) -> float:
         return self.profit / self.staked if self.staked else 0.0
+
+
+PAPER_UNIT = 100.0  # условная ставка на каждый прогноз в бумажном учёте
 
 
 def _now() -> datetime:
@@ -197,8 +210,8 @@ def summarize(signals: list[Signal], real: bool) -> Summary | None:
     rows = [s for s in signals if s.status in ("won", "lost") and (s.placed if real else s.source == "boss")]
     if not rows:
         return None
-    staked = sum((s.actual_stake if real else s.stake) or 0 for s in rows)
-    profits = [(s.profit if real else s.paper_profit) or 0 for s in rows]
+    staked = sum((s.actual_stake or 0) if real else PAPER_UNIT for s in rows)
+    profits = [(s.profit or 0) if real else s.paper_flat for s in rows]
     odds = [(s.actual_odds or s.min_odds) if real else s.paper_odds for s in rows]
     peak = cum = dd = 0.0
     for p in profits:

@@ -43,7 +43,7 @@ from .data.nhl import season_start as nhl_season_start
 from .data.odds import Event, OddsClient, Quota, ScanReport
 from .data.stats import Result, StandingRow, StatsClient, football_season_start
 from .data.teams import best_match
-from .db import DB, Signal
+from .db import DB, PAPER_UNIT, Signal
 from .sports import FOOTBALL, SPORTS, Sport, group_of, line_for, sel_ru, sel_short
 
 log = logging.getLogger(__name__)
@@ -1361,7 +1361,7 @@ class Engine:
                 paper = real = 0.0
             else:
                 won = outcome == "won"
-                paper = s.stake * (s.paper_odds - 1) if won else -s.stake
+                paper = PAPER_UNIT * (s.paper_odds - 1) if won else -PAPER_UNIT
                 real = 0.0
                 if s.placed and s.actual_stake:
                     real = s.actual_stake * ((s.actual_odds or s.min_odds) - 1) if won else -s.actual_stake
