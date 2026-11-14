@@ -373,9 +373,13 @@ def test_late_check_text_and_reminder_timing():
     # рано: за 3 часа до матча напоминания нет
     db.delete(f"late_sent:{ctx.event.event_id}")
     assert engine.due_late_checks(now - timedelta(hours=3)) == []
-    # все исходы отмечены — проверка не нужна
-    for s in db.boss_picks(ctx.event.event_id):
-        db.decide(s.id, placed=False)
+    # есть ваша ставка — напоминание тоже приходит
+    picks = db.boss_picks(ctx.event.event_id)
+    db.decide(picks[0].id, placed=True, odds=2.0, stake=50)
+    db.decide(picks[1].id, placed=False)
+    assert engine.due_late_checks(now) == [num]
+    # всё «Не ставил» — проверка не нужна
+    db.decide(picks[0].id, placed=False)
     assert engine.due_late_checks(now) == []
 
 

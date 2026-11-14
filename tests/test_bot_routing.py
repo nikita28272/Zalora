@@ -235,7 +235,7 @@ def test_late_check_reminder_is_sent_once_outside_quiet_hours(monkeypatch):
     asyncio.run(handlers.run_late_checks(bot, engine, OWNER))
     asyncio.run(handlers.run_late_checks(bot, engine, OWNER))
     texts = _texts(session)
-    assert sum("пора поздней проверки" in t for t in texts) == 1
+    assert sum("⏰ <b>Скоро матч" in t for t in texts) == 1
     assert any(f"ПРОВЕРКА #{num}" in t for t in texts)
 
 

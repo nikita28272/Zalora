@@ -1200,5 +1200,18 @@ async def run_late_checks(bot: Bot, engine: Engine, chat_id: int) -> None:
         except ValueError:
             continue
         engine.mark_late_sent(num)
-        await bot.send_message(chat_id, "⏰ <b>Скоро матч — пора поздней проверки.</b> Скопируйте блок в чат с Claude.")
+        ctx = engine.load_candidate(num)
+        picks = [s for s in engine.db.pending() if ctx and s.event_id == ctx.event.event_id]
+        placed = [s for s in picks if s.placed]
+        when = f"{fmt.local(ctx.event.kickoff):%H:%M}" if ctx else ""
+        head = (f"⏰ <b>Скоро матч: {fmt.escape(ctx.title) if ctx else f'#{num}'}</b>"
+                + (f" — начало в {when}" if when else ""))
+        if placed:
+            head += ("\n💰 Ваша ставка: " + ", ".join(
+                f"{fmt.escape(fmt.sig_short(s))} {fmt._money(s.actual_stake or 0)} × {(s.actual_odds or s.min_odds):.2f}"
+                for s in placed)
+                + "\nПоздняя проверка покажет, не случилось ли что-то перед игрой (травмы, составы, вратари).")
+        if any(s.user_decision == "pending" for s in picks):
+            head += "\n❔ Есть прогноз без отметки: проверьте и решите — «Сделал» или «Не ставил»."
+        await bot.send_message(chat_id, head + "\nСкопируйте блок ниже в чат с Claude.")
         await bot.send_message(chat_id, fmt.dossier_message(text))

@@ -1225,11 +1225,12 @@ class Engine:
         return "\n".join(lines)
 
     def due_late_checks(self, now: datetime | None = None) -> list[int]:
-        """Матчи с неотмеченными прогнозами босса, по которым пора делать позднюю проверку (напоминание — один раз)."""
+        """Матчи, по которым пора делать позднюю проверку (напоминание — один раз): прогнозы босса
+        без отметки или с вашей ставкой («Сделал»). Если по матчу всё отмечено «Не ставил» — молчим."""
         now = now or datetime.now(timezone.utc)
         due: list[int] = []
         for s in self.db.pending():
-            if s.source != "boss" or s.user_decision != "pending":
+            if s.source != "boss" or s.user_decision not in ("pending", "placed"):
                 continue
             lead = {"hockey": settings.late_check_hockey_minutes,
                     "basketball": settings.late_check_basketball_minutes}.get(
