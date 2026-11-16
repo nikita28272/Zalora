@@ -40,6 +40,7 @@ done
 if [ "${SKIP_DOCKER:-0}" = "1" ]; then
     exit 0
 fi
-# up -d пересоздаёт контейнер с новыми переменными (restart их не перечитывает)
-docker compose up -d
+# up -d --build: пересобирает образ (если был git pull) и пересоздаёт контейнер с новыми переменными;
+# --force-recreate — бот перезапускается всегда и присылает «✅ Бот запущен» с расписанием
+docker compose up -d --build --force-recreate
 echo "✅ Бот перезапущен с новыми настройками."
