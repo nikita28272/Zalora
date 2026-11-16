@@ -441,8 +441,13 @@ def matches_keyboard(matches, top=None, nba=None) -> InlineKeyboardMarkup | None
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def signals_keyboard(pending) -> InlineKeyboardMarkup | None:
-    """У неотмеченных сигналов (до начала матча) — «Сделал / Не ставил»; внизу — «🔄 Обновить»."""
+def _short_team(name: str) -> str:
+    return name.split()[-1] if name else name
+
+
+def signals_keyboard(pending, nums: dict[str, int] | None = None) -> InlineKeyboardMarkup | None:
+    """У неотмеченных сигналов (до начала матча) — «Сделал / Не ставил»; затем «🥅 Проверка» по каждому
+    разобранному матчу, который ещё не начался (nums: event_id → номер досье); внизу — «🔄 Обновить»."""
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
     rows = [
@@ -450,9 +455,29 @@ def signals_keyboard(pending) -> InlineKeyboardMarkup | None:
          InlineKeyboardButton(text=f"❌ Не ставил #{s.id}", callback_data=f"bet:{s.id}:skip")]
         for s in sorted(pending, key=lambda x: x.kickoff) if s.user_decision == "pending" and s.kickoff > now
     ]
+    checks, seen = [], set()
+    for s in sorted(pending, key=lambda x: x.kickoff):
+        num = (nums or {}).get(s.event_id)
+        if s.source != "boss" or num is None or s.kickoff <= now or s.event_id in seen:
+            continue
+        seen.add(s.event_id)
+        title = f"🥅 {_short_team(s.home)} — {_short_team(s.away)}"[:40]
+        checks.append(InlineKeyboardButton(text=title, callback_data=f"late:{num}"))
+    rows += [checks[i:i + 2] for i in range(0, len(checks), 2)]
     if pending:
         rows.append([InlineKeyboardButton(text="🔄 Обновить", callback_data="board:refresh")])
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def board_nums(engine, pending) -> dict[str, int]:
+    """Номера досье разобранных матчей — для кнопок «🥅 Проверка» в «📌 Прогнозы и ставки»."""
+    out = {}
+    for s in pending:
+        if s.event_id not in out:
+            num = engine.num_for_event(s.event_id)
+            if num is not None:
+                out[s.event_id] = num
+    return out
 
 
 def bank_keyboard() -> InlineKeyboardMarkup:
@@ -593,7 +618,7 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         if not pending:
             await message.answer("📌 Открытых прогнозов и ставок нет. Сыгранные — в «📊 Статистика».")
             return
-        await send_long(message.bot, message.chat.id, fmt.signals_board(pending), signals_keyboard(pending))
+        await send_long(message.bot, message.chat.id, fmt.signals_board(pending), signals_keyboard(pending, board_nums(engine, pending)))
 
     @owner.callback_query(F.data == "board:refresh")
     async def on_board_refresh(cb: CallbackQuery) -> None:
@@ -602,12 +627,12 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
         await cb.answer("Обновлено")
         try:
             if len(text) <= 4000:
-                await cb.message.edit_text(text, reply_markup=signals_keyboard(pending),
+                await cb.message.edit_text(text, reply_markup=signals_keyboard(pending, board_nums(engine, pending)),
                                            disable_web_page_preview=True)
                 return
         except Exception:  # noqa: BLE001 — текст не изменился или сообщение слишком старое
             return
-        await send_long(cb.bot, cb.message.chat.id, text, signals_keyboard(pending))
+        await send_long(cb.bot, cb.message.chat.id, text, signals_keyboard(pending, board_nums(engine, pending)))
 
     @owner.message(Command("fire"))
     async def cmd_fire(message: Message, command: CommandObject) -> None:
@@ -1162,7 +1187,7 @@ async def run_settle(bot: Bot, engine: Engine, db: DB, chat_id: int, verbose: bo
     await send_long(bot, chat_id, text)
     pending = db.pending()
     if pending:  # после итогов — свежий список: сыгранные ушли, остались открытые
-        await send_long(bot, chat_id, fmt.signals_board(pending), signals_keyboard(pending))
+        await send_long(bot, chat_id, fmt.signals_board(pending), signals_keyboard(pending, board_nums(engine, pending)))
 
 
 async def run_excel(bot: Bot, db: DB, chat_id: int) -> None:

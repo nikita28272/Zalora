@@ -272,3 +272,19 @@ def test_late_check_label_uses_pick_line():
     db.conn.execute("UPDATE signals SET line = 2.5 WHERE id = ?", (sig.id,))  # прогноз был на +2.5
     text = engine.late_check(num)
     assert "hcp_away@+2.5 = Ф2(+2.5)" in text and "основная линия сейчас Ф2(+1.5)" in text
+
+
+def test_board_has_late_check_buttons_for_analyzed_matches():
+    from bot.tg.handlers import board_nums, signals_keyboard
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _ctx(datetime.now(timezone.utc) + timedelta(hours=5))
+    num = engine.save_candidate(ctx)
+    engine.manual_top(num, [("hcp_away", 0.59), ("over", 0.5)], "medium")
+    pending = db.pending()
+    kb = signals_keyboard(pending, board_nums(engine, pending))
+    data = [b.callback_data for r in kb.inline_keyboard for b in r]
+    assert data.count(f"late:{num}") == 1  # одна кнопка на матч, а не на каждый исход
+    assert any(b.text.startswith("🥅 ") for r in kb.inline_keyboard for b in r)
+    assert data[-1] == "board:refresh"
