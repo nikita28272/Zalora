@@ -304,3 +304,39 @@ def test_edge_chance_levels():
     ctx.model = ModelOutput(3.0, 2.5, probs, 100, 100)
     level, text = Engine.edge_chance(ctx)
     assert level == 2 and "🟢 шанс перевеса: высокий" in text and "модель выше линии на 7%" in text
+
+
+def test_injuries_parse_and_edge_downgrade():
+    from bot.analysis.poisson import ModelOutput
+    from bot.data.injuries import parse_injuries
+
+    data = {"injuries": [{"displayName": "Toronto Maple Leafs", "injuries": [
+        {"status": "Out", "athlete": {"displayName": "Auston Matthews"}, "details": {"type": "Knee"}},
+        {"status": "Out", "athlete": {"displayName": "William Nylander"}, "shortComment": "lower body"},
+        {"status": "Day-To-Day", "athlete": {"displayName": "John Tavares"}},
+        {"athlete": {"displayName": "битая запись"}}]},
+        {"displayName": "Boston Bruins", "injuries": []}]}
+    inj = parse_injuries(data)
+    assert [i.name for i in inj["Toronto Maple Leafs"]] == ["Auston Matthews", "William Nylander", "John Tavares"]
+    assert inj["Toronto Maple Leafs"][0].out and not inj["Toronto Maple Leafs"][2].out
+    assert parse_injuries({"oops": 1}) == {}
+
+    ctx = _ctx(NOW + timedelta(days=1))
+    sel = next(s for s, o in ctx.market.avg_odds.items()
+               if 1.70 <= o <= 2.50 and s not in ctx.market.estimated and s in ("ml_home", "hcp_home", "home"))
+    probs = dict(ctx.market.fair)
+    probs[sel] = ctx.market.fair[sel] + 0.07
+    ctx.model = ModelOutput(3.0, 2.5, probs, 100, 100)
+    assert Engine.edge_chance(ctx)[0] == 2
+    ctx.home_inj = inj["Toronto Maple Leafs"]  # модель любит хозяев, а у них двое лидеров не играют
+    level, text = Engine.edge_chance(ctx)
+    assert level == 1 and "⚠️ разрыв, возможно, из-за травм" in text and "Auston Matthews" in text
+    dossier_inj = ctx.injuries_text()
+    assert "ТРАВМЫ (отчёт ESPN" in dossier_inj and "Auston Matthews — не играет (Knee)" in dossier_inj
+    assert "John Tavares — решат в день игры" in dossier_inj
+
+    # травмы переживают сохранение досье
+    db = DB(":memory:")
+    engine = Engine(db)
+    num = engine.save_candidate(ctx)
+    assert [i.name for i in engine.load_candidate(num).home_inj][:1] == ["Auston Matthews"]

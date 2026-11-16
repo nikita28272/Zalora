@@ -212,8 +212,12 @@ def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
         return BetPlan(p, odds, ev, 0, 0, "не ставить", block, need, 0)
     if p < cfg.min_stake_prob - 1e-9:
         return BetPlan(p, odds, ev, 0, 0, "не ставить",
-                       f"шанс {p:.0%} ниже {cfg.min_stake_prob:.0%}: по нашей статистике такие прогнозы "
-                       "не окупаются — только на бумаге", need, own)
+                       f"шанс {p:.0%} ниже {cfg.min_stake_prob:.0%} — только на бумаге", need, own)
+    if ev < cfg.min_stake_ev - 1e-9:
+        fair = (1 + cfg.min_stake_ev) / p
+        return BetPlan(p, odds, ev, 0, 0, "не ставить",
+                       f"шанс {p:.0%} × кэф {odds:.2f} = {p * odds:.2f}: ожидаемый плюс {ev:+.1%} меньше "
+                       f"{cfg.min_stake_ev:.0%} — только на бумаге; ставить от кэфа {fair:.2f}", need, own)
     if by_analysis:
         if confidence not in ("medium", "high"):
             return BetPlan(p, odds, ev, 0, 0, "на свой риск",

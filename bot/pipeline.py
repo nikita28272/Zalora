@@ -36,6 +36,7 @@ from .analysis.nba_factors import Factors, nba_factors
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, RISK_NAMES_RU, League, settings
 from .data import news
+from .data.injuries import Injury, InjuryClient
 from .data.nba import NbaClient, standings_from_results
 from .data.nba import season_start as nba_season_start
 from .data.nhl import NhlClient
@@ -151,6 +152,36 @@ class MatchContext:
     away_last: list[str] = field(default_factory=list)
     factors: Factors | None = None  # НБА: перекос графика (считается при загрузке матчей)
     factors_text: str = ""  # то же текстом для досье (сохраняется в снимке)
+    home_inj: list[Injury] = field(default_factory=list)  # травмы ESPN (НБА, НХЛ)
+    away_inj: list[Injury] = field(default_factory=list)
+
+    def injuries_text(self) -> str:
+        """Блок травм для досье: кто не играет и под вопросом (по отчёту ESPN)."""
+        if not (self.home_inj or self.away_inj) and self.sport.key not in ("basketball", "hockey"):
+            return ""
+        lines = ["ТРАВМЫ (отчёт ESPN на момент досье; агентам — проверить свежий):"]
+        for team, inj in ((self.event.home_team, self.home_inj), (self.event.away_team, self.away_inj)):
+            if inj:
+                items = sorted(inj, key=lambda i: not i.out)[:8]
+                lines.append(f"  {team}: " + "; ".join(
+                    f"{i.name} — {i.status_ru}" + (f" ({i.detail})" if i.detail else "") for i in items))
+            else:
+                lines.append(f"  {team}: в отчёте никого (или отчёт недоступен)")
+        return "\n".join(lines)
+
+    def injury_warning(self, sel: str) -> str:
+        """Разрыв модели с линией по этому исходу может объясняться травмами, которых модель не знает."""
+        h_out = [i.name for i in self.home_inj if i.out]
+        a_out = [i.name for i in self.away_inj if i.out]
+        side = ("home" if sel in ("ml_home", "home", "hcp_home", "dc_home") else
+                "away" if sel in ("ml_away", "away", "hcp_away", "dc_away") else None)
+        if side == "home" and len(h_out) >= 2:
+            return f"у {self.event.home_team} не играют {len(h_out)}: {', '.join(h_out[:3])}"
+        if side == "away" and len(a_out) >= 2:
+            return f"у {self.event.away_team} не играют {len(a_out)}: {', '.join(a_out[:3])}"
+        if sel == "over" and len(h_out) + len(a_out) >= 3:
+            return f"не играют {len(h_out) + len(a_out)} игроков: {', '.join((h_out + a_out)[:3])}"
+        return ""
 
     @property
     def title(self) -> str:
@@ -380,6 +411,7 @@ class Engine:
         self.stats = StatsClient()
         self.nhl = NhlClient()
         self.nba = NbaClient()
+        self.injuries = InjuryClient()
         self.matches: list[MatchContext] = []
         self._events: tuple[float, list[Event]] = (0.0, [])
         self.last_report: ScanReport | None = None
@@ -526,6 +558,8 @@ class Engine:
         events = [e for e in await self._upcoming(max_age_minutes, force) if is_prematch(e.kickoff)]
         leagues = {e.league.fd_code: e.league for e in events}
         league_data = {code: await self._league_data(lg) for code, lg in sorted(leagues.items())}
+        injuries = {sp: await self.injuries.fetch(sp)
+                    for sp in sorted({e.league.sport for e in events} & {"basketball", "hockey"})}
 
         matches: list[MatchContext] = []
         for event in events:
@@ -552,6 +586,12 @@ class Engine:
                         ctx.factors_text = ctx.factors.text()
                     ctx.home_form, ctx.away_form = model.form(ctx.fd_home), model.form(ctx.fd_away)
                     ctx.home_last, ctx.away_last = model.last_results(ctx.fd_home), model.last_results(ctx.fd_away)
+            inj = injuries.get(event.league.sport) or {}
+            if inj:
+                h = best_match(event.home_team, inj.keys())
+                a = best_match(event.away_team, inj.keys())
+                ctx.home_inj = inj.get(h, []) if h else []
+                ctx.away_inj = inj.get(a, []) if a else []
             if rows:
                 by_name = {r.team: r for r in rows}
                 h = best_match(event.home_team, by_name.keys())
@@ -819,6 +859,8 @@ class Engine:
             "home_form": ctx.home_form, "away_form": ctx.away_form,
             "home_last": ctx.home_last, "away_last": ctx.away_last,
             "factors_text": ctx.factors_text,
+            "home_inj": [i.as_list() for i in ctx.home_inj],
+            "away_inj": [i.as_list() for i in ctx.away_inj],
         }
 
     @staticmethod
@@ -838,6 +880,8 @@ class Engine:
             home_form=snap["home_form"], away_form=snap["away_form"],
             home_last=snap["home_last"], away_last=snap["away_last"],
             factors_text=snap.get("factors_text", ""),
+            home_inj=[Injury.from_list(x) for x in snap.get("home_inj", [])],
+            away_inj=[Injury.from_list(x) for x in snap.get("away_inj", [])],
         )
 
     def save_candidate(self, ctx: MatchContext) -> int:
@@ -872,6 +916,7 @@ class Engine:
                 f"ДОСЬЕ #{num} ДЛЯ БОССА",
                 ctx.brief(),
                 ctx.numbers(),
+                ctx.injuries_text(),
                 safe_text(ctx),
                 self.finance_report(),
                 "РЕЖИМ НБА: ПО АНАЛИЗУ (не по перевесу над линией).",
@@ -881,8 +926,9 @@ class Engine:
                 f"2. Каждый докладывает по всем исходам: {codes}.\n"
                 "3. Проверь факторы графика бота, оцени вероятность каждого исхода по фактам.\n"
                 f"4. Выбери ОДИН или ДВА исхода с самым сильным обоснованием и самым высоким шансом захода среди "
-                f"кэфов {settings.min_odds:.2f}–{settings.max_odds:.2f} (в том числе код@линия). Второй — только если "
-                f"его шанс не ниже {settings.min_stake_prob:.0%}, иначе дай один. Уверенность: high — 3+ "
+                f"кэфов {settings.min_odds:.2f}–{settings.max_odds:.2f} (в том числе код@линия). Ставка — если шанс × кэф "
+                f"≥ {1 + settings.min_stake_ev:.2f} (лучше основная линия по кэфу ~1.9, чем запас по ≈1.72). Второй "
+                f"исход — только если он тоже проходит это правило, иначе дай один. Уверенность: high — 3+ "
                 "независимых фактора за и нет вопросов по составу; medium — 2 фактора; low — иначе.\n"
                 f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
                 f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
@@ -891,6 +937,7 @@ class Engine:
             f"ДОСЬЕ #{num} ДЛЯ БОССА",
             ctx.brief(),
             ctx.numbers(),
+            ctx.injuries_text(),
             safe_text(ctx),
             self.finance_report(),
             cand,
@@ -907,7 +954,8 @@ class Engine:
             +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
-            f"4. Выбери ОДИН или ДВА лучших исхода (второй — только с шансом от {settings.min_stake_prob:.0%}) "
+            f"4. Выбери ОДИН или ДВА лучших исхода (ставка — если шанс × кэф ≥ {1 + settings.min_stake_ev:.2f}; "
+            f"второй — только если тоже проходит) "
             f"с кэфом {settings.min_odds:.2f}–{settings.max_odds:.2f} и самым высоким "
             f"шансом захода (код@линия), среди них — с перевесом от {settings.min_edge:.0%}; если таких нет — "
             "с наибольшим перевесом из оставшихся. Последней строкой — команда для бота:\n"
@@ -1030,7 +1078,8 @@ class Engine:
             in_range = settings.min_odds <= odds <= settings.max_odds
             if by_analysis:
                 # НБА: ставка по силе разбора (уверенность босса), а не по перевесу над линией
-                positive = confidence in ("medium", "high") and in_range and p >= settings.min_stake_prob - 1e-9
+                positive = (confidence in ("medium", "high") and in_range and p >= settings.min_stake_prob - 1e-9
+                            and p * odds - 1 >= settings.min_stake_ev - 1e-9)
                 if positive:
                     sd = flat_stake(state, settings, analysis_pct(p, confidence, settings))
                     stake, note = (sd.stake, f"по анализу: {sd.reason}") if sd.allowed else (
@@ -1043,7 +1092,8 @@ class Engine:
                 made.append(Pick(sel, p, p_market, odds, ev, round(1 / p, 2), positive, stake, note,
                                  line=line, estimated=estimated))
                 continue
-            positive = ev >= settings.min_edge and in_range and p >= settings.min_stake_prob - 1e-9
+            positive = (ev >= max(settings.min_edge, settings.min_stake_ev) - 1e-9 and in_range
+                        and p >= settings.min_stake_prob - 1e-9)
             if positive:
                 sd = decide_stake(p, odds, state, settings)
                 if sd.allowed:
@@ -1232,6 +1282,10 @@ class Engine:
             if chance and chance[1] >= settings.min_edge:
                 reasons.append(f"оценка {chance[1]:+.1%} по {m.short(chance[0])}")
                 level = 2
+        warn = m.injury_warning(gap_sel) if gap_sel and gap >= 0.03 else ""
+        if warn:  # модель не знает о травмах: разрыв, скорее всего, учтён рынком
+            level = max(level - 1, 0)
+            reasons.append(f"⚠️ разрыв, возможно, из-за травм — {warn}")
         mark = {2: "🟢 шанс перевеса: высокий", 1: "🟡 шанс перевеса: средний", 0: "⚪ шанс перевеса: низкий"}[level]
         return level, mark + (f" ({'; '.join(reasons)})" if reasons else "")
 

@@ -654,3 +654,19 @@ def test_min_stake_prob_paper_only_and_rank_stats():
     assert "№1 главный: 4 из 4 (100%)" in text and "№2 второй: 1 из 4 (25%)" in text
     acc = fmt.accuracy(db.settled())
     assert "Главный и второй прогноз" in acc and "№2 второй: ждали 52%, зашло 25%" in acc
+
+
+def test_min_stake_ev_rule():
+    from bot.analysis.bankroll import RiskState, plan_bet
+    from bot.config import settings as cfg
+    from conftest import set_setting
+
+    set_setting("min_stake_prob", 0.50)
+    set_setting("min_stake_ev", 0.03)  # вернёт фикстура
+    st = RiskState(1000, 0, 0, 0, peak=1000)
+    good = plan_bet(0.54, 1.96, st, cfg, by_analysis=True, confidence="medium")  # 1.058
+    assert good.stake > 0
+    bad = plan_bet(0.55, 1.75, st, cfg, by_analysis=True, confidence="medium")  # 0.9625
+    assert bad.stake == 0 and "только на бумаге" in bad.reason and "ставить от кэфа 1.87" in bad.reason
+    low = plan_bet(0.48, 2.40, st, cfg)
+    assert low.stake == 0 and "ниже 50%" in low.reason
