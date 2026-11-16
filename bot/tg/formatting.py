@@ -190,7 +190,9 @@ def daily_block(picks: list[tuple[MatchContext, str]], total: int) -> str:
         lines.append(f"<b>{m.idx}.</b> {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)}\n    {escape(why)}")
     lines += ["", "Нажмите 📋 с номером — придёт досье, его — в чат с Claude.",
               f"<i>Набор на игровой день: до {settings.daily_rollover_hour}:00 завтра список не меняется. "
-              "⭐ — с перевесом, ✅ — уже разобран.</i>"]
+              "✅ — уже разобран.</i>",
+              "<i>🟢/🟡/⚪ — шанс найти перевес при разборе (модель против линии, для НБА — и график). "
+              "Открывайте досье сверху вниз; ⚪ можно пропустить.</i>"]
     if total > len(picks):
         lines.append(f"<i>Всего матчей в линии: {total} — остальные по кнопке «📃 Все матчи».</i>")
     return "\n".join(lines)

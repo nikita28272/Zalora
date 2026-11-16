@@ -288,3 +288,19 @@ def test_board_has_late_check_buttons_for_analyzed_matches():
     assert data.count(f"late:{num}") == 1  # одна кнопка на матч, а не на каждый исход
     assert any(b.text.startswith("🥅 ") for r in kb.inline_keyboard for b in r)
     assert data[-1] == "board:refresh"
+
+
+def test_edge_chance_levels():
+    from bot.analysis.poisson import ModelOutput
+
+    ctx = _ctx(NOW + timedelta(days=1))
+    level, text = Engine.edge_chance(ctx)
+    assert level == 0 and text.startswith("⚪ шанс перевеса: низкий")
+    fair = dict(ctx.market.fair)
+    probs = {k: v for k, v in fair.items()}
+    sel = next(s for s, o in ctx.market.avg_odds.items()
+               if 1.70 <= o <= 2.50 and s not in ctx.market.estimated)
+    probs[sel] = fair[sel] + 0.07  # модель заметно выше линии
+    ctx.model = ModelOutput(3.0, 2.5, probs, 100, 100)
+    level, text = Engine.edge_chance(ctx)
+    assert level == 2 and "🟢 шанс перевеса: высокий" in text and "модель выше линии на 7%" in text

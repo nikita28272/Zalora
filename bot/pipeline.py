@@ -1148,7 +1148,8 @@ class Engine:
                 if m is None or not is_prematch(m.event.kickoff):
                     continue
                 _, why = self._daily_score(m)
-                out.append((m, ("✅ разобран · " if eid in done else "") + why))
+                level, chance = self.edge_chance(m)
+                out.append((m, ("✅ разобран · " if eid in done else "") + chance + " · " + why))
             return out
         pool = [m for m in pool_all.values() if m.event.event_id not in done and is_prematch(m.event.kickoff)]
         soon = now + timedelta(hours=settings.daily_window_hours)
@@ -1162,13 +1163,47 @@ class Engine:
                 score, why = self._daily_score(m)
                 opts = safe_options(m)
                 prob = opts[0].p if opts else 0.0
-                ranked.append(((m.event.kickoff > soon, not self._has_edge(m, score), -prob, -score), m, why))
+                level, chance = self.edge_chance(m)
+                ranked.append(((m.event.kickoff > soon, -level, -prob, -score), m, chance + " · " + why))
             ranked.sort(key=lambda x: x[0])
-            out += [(m, ("⭐ перевес · " if self._has_edge(m, self._daily_score(m)[0]) else "") + why)
-                    for _, m, why in ranked[:quota[sport]]]
+            out += [(m, why) for _, m, why in ranked[:quota[sport]]]
         if out:
             self.db.set(key, [m.event.event_id for m, _ in out])
         return out
+
+    @staticmethod
+    def edge_chance(m: MatchContext) -> tuple[int, str]:
+        """Шанс найти перевес при разборе (до агентов): 2 — высокий, 1 — средний, 0 — низкий.
+
+        Главный признак — модель статистика расходится с честной линией конторы (рынок может
+        чего-то не учесть, агенты проверят, что именно). Для НБА ещё — перекос графика и усталости,
+        для хоккея и футбола — оценка «модель + рынок» по лучшему исходу.
+        Только исходы с кэфом MIN_ODDS–MAX_ODDS: остальные мы всё равно не ставим.
+        """
+        gap, gap_sel = 0.0, None
+        if m.model:
+            for sel, p_model in m.model.probs.items():
+                p_mkt, odds = m.market.fair.get(sel), m.market.avg_odds.get(sel)
+                if p_mkt is None or odds is None or sel in m.market.estimated:
+                    continue
+                if settings.min_odds <= odds <= settings.max_odds and p_model - p_mkt > gap:
+                    gap, gap_sel = p_model - p_mkt, sel
+        reasons = []
+        if gap_sel and gap >= 0.03:
+            reasons.append(f"модель выше линии на {gap:.0%} по {m.short(gap_sel)}")
+        level = 2 if gap >= 0.06 else 1 if gap >= 0.03 else 0
+        if m.sport.key == "basketball" and settings.nba_mode == "analysis":
+            f = m.factors
+            if f and f.side != "—" and f.score >= settings.nba_min_factor:
+                reasons.append(f"перекос графика {f.score:.1f}")
+                level = max(level, 2 if f.score >= 2 * settings.nba_min_factor else 1)
+        else:
+            chance = m.best_chance()
+            if chance and chance[1] >= settings.min_edge:
+                reasons.append(f"оценка {chance[1]:+.1%} по {m.short(chance[0])}")
+                level = 2
+        mark = {2: "🟢 шанс перевеса: высокий", 1: "🟡 шанс перевеса: средний", 0: "⚪ шанс перевеса: низкий"}[level]
+        return level, mark + (f" ({'; '.join(reasons)})" if reasons else "")
 
     @staticmethod
     def _has_edge(m: MatchContext, score: float) -> bool:
