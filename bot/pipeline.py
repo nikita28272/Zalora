@@ -1240,8 +1240,14 @@ class Engine:
         mark = {"pending": "не отмечен", "placed": "ВЛАДЕЛЕЦ УЖЕ ПОСТАВИЛ", "skipped": "не ставил",
                 "expired": "без отметки"}
         for s in picks:
+            # подпись — по линии самого прогноза: основная линия конторы могла с тех пор смениться
+            code, label = s.selection, sel_short(ctx.sport, s.selection, s.line)
+            now_line = ctx.line(s.selection)
+            if s.line is not None and now_line is not None and s.line != now_line:
+                code = f"{s.selection}@{s.line:+g}" if s.selection.startswith("hcp") else f"{s.selection}@{s.line:g}"
+                label += f" (основная линия сейчас {ctx.short(s.selection)})"
             lines.append(
-                f"  {s.pick_rank or '-'}. {s.selection} = {ctx.short(s.selection)}: босс {s.p_final:.1%}, "
+                f"  {s.pick_rank or '-'}. {code} = {label}: босс {s.p_final:.1%}, "
                 f"кэф {s.odds_ref:.2f}, перевес {s.edge:+.1%} ({mark.get(s.user_decision, s.user_decision)})"
             )
         lines += ["", "ЛИНИЯ НА МОМЕНТ ДОСЬЕ (вероятность без маржи / средний кэф):"]

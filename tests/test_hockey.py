@@ -260,3 +260,15 @@ def test_hockey_dossier_model_block_consistent():
     text = ctx.numbers()
     assert "модель Пуассона" in text and "недостаточно данных" not in text
     assert "ВЕРОЯТНОСТИ ПО МОДЕЛИ (модель по голам" in text and "П1 ОТ: 70.0%" in text and ": 59.0%" in text
+
+
+def test_late_check_label_uses_pick_line():
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _ctx(NOW + timedelta(days=1))
+    num = engine.save_candidate(ctx)
+    engine.manual_top(num, [("hcp_away", 0.59), ("over", 0.5)], "medium")
+    sig = next(s for s in db.boss_picks(ctx.event.event_id) if s.selection == "hcp_away")
+    db.conn.execute("UPDATE signals SET line = 2.5 WHERE id = ?", (sig.id,))  # прогноз был на +2.5
+    text = engine.late_check(num)
+    assert "hcp_away@+2.5 = Ф2(+2.5)" in text and "основная линия сейчас Ф2(+1.5)" in text
