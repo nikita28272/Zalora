@@ -21,7 +21,8 @@ URLS = {
     "hockey": "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/injuries",
 }
 CACHE_SECONDS = 30 * 60
-STATUS_RU = {"out": "не играет", "doubtful": "вряд ли сыграет", "questionable": "под вопросом",
+STATUS_RU = {"out": "не играет", "injured reserve": "в списке травмированных (не играет)",
+             "ir": "в списке травмированных (не играет)", "ltir": "долгосрочно травмирован (не играет)", "doubtful": "вряд ли сыграет", "questionable": "под вопросом",
              "day-to-day": "решат в день игры", "probable": "скорее сыграет", "suspension": "дисквалифицирован"}
 
 
@@ -33,8 +34,10 @@ class Injury:
 
     @property
     def out(self) -> bool:
+        """Точно не играет: Out, список травмированных (Injured Reserve / IR, LTIR), дисквалификация."""
         s = self.status.lower()
-        return s.startswith("out") or "suspen" in s
+        return (s.startswith("out") or "suspen" in s or "injured reserve" in s
+                or s in ("ir", "ltir", "il") or s.startswith(("ir-", "ir ", "ltir")))
 
     @property
     def status_ru(self) -> str:

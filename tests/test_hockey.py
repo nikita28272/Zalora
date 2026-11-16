@@ -320,6 +320,10 @@ def test_injuries_parse_and_edge_downgrade():
     assert [i.name for i in inj["Toronto Maple Leafs"]] == ["Auston Matthews", "William Nylander", "John Tavares"]
     assert inj["Toronto Maple Leafs"][0].out and not inj["Toronto Maple Leafs"][2].out
     assert parse_injuries({"oops": 1}) == {}
+    from bot.data.injuries import Injury
+    ir = Injury("Dylan Guenther", "Injured Reserve", "Upper Body")
+    assert ir.out and ir.status_ru == "в списке травмированных (не играет)"
+    assert Injury("X", "IR").out and Injury("X", "LTIR").out and not Injury("X", "Day-To-Day").out
 
     ctx = _ctx(NOW + timedelta(days=1))
     sel = next(s for s, o in ctx.market.avg_odds.items()
