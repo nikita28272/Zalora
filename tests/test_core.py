@@ -626,3 +626,31 @@ def test_long_dossier_is_split_into_copyable_parts():
     # все строки на месте и по порядку
     joined = "".join(parts)
     assert joined.count("строка 59") == 4 and "&lt;исход&gt;" in joined
+
+
+def test_min_stake_prob_paper_only_and_rank_stats():
+    from bot.analysis.bankroll import RiskState, plan_bet
+    from bot.config import settings as cfg
+    from bot.tg import formatting as fmt
+    from conftest import set_setting
+
+    set_setting("min_stake_prob", 0.55)  # вернёт фикстура
+    st = RiskState(1000, 0, 0, 0, peak=1000)
+    low = plan_bet(0.53, 1.95, st, cfg, by_analysis=True, confidence="medium")
+    assert low.stake == 0 and "ниже 55%" in low.reason and "только на бумаге" in low.reason
+    ok = plan_bet(0.56, 1.85, st, cfg, by_analysis=True, confidence="medium")
+    assert ok.stake > 0
+
+    db = DB(":memory:")
+    base = dict(league_code="NBA", league_name="НБА", home="A", away="B", odds_ref=1.9, min_odds=1.9,
+                p_market=0.5, p_model=None, edge=0.0, stake=10, confidence="medium", reasoning="r",
+                sport="basketball", kickoff=NOW.isoformat())
+    for i in range(4):
+        a = db.add_signal(event_id=f"r{i}", selection="over", p_final=0.57, pick_rank=1, **base)
+        b = db.add_signal(event_id=f"r{i}", selection="hcp_home", p_final=0.52, pick_rank=2, **base)
+        db.settle(a, "won", "1:0", 0, 90)
+        db.settle(b, "won" if i == 0 else "lost", "1:0", 0, 0)
+    text = fmt.stats(db.settled(), db.settled(), db.bankroll(), week=db.settled())
+    assert "№1 главный: 4 из 4 (100%)" in text and "№2 второй: 1 из 4 (25%)" in text
+    acc = fmt.accuracy(db.settled())
+    assert "Главный и второй прогноз" in acc and "№2 второй: ждали 52%, зашло 25%" in acc

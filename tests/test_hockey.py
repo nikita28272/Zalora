@@ -150,7 +150,7 @@ def test_hockey_manual_flow_to_settlement():
 
     text = engine.dossier(ctx, num)
     assert "🏒" in text and "ml_home" in text and "hcp_home (Ф1(-1.5))" in text and "вратар" in text
-    assert len(fmt.dossier_message(text)) < 4000
+    assert all(len(p) <= 4096 for p in fmt.dossier_parts(text))  # длинное досье уходит частями
 
     assert f"/verdict {num} <исход1>" in text
 

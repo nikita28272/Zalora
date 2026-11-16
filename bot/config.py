@@ -199,6 +199,8 @@ class Settings:
     # сумма бумажного учёта (и потолок совета) для прогнозов босса без перевеса
     paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
     # НБА «по анализу»: при перевесе ниже этого (по оценке босса и вашему кэфу) финансист ставить не даёт
+    # статистика: прогнозы босса с шансом ниже 55% не окупаются — финансист их не ставит (только бумага)
+    min_stake_prob: float = field(default_factory=lambda: _float("MIN_STAKE_PROB", 0.55))
     analysis_min_edge: float = field(default_factory=lambda: _float("ANALYSIS_MIN_EDGE", -0.03))
     max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 0))  # 0 — без лимита
     daily_loss_limit_pct: float = field(default_factory=lambda: _profiled("DAILY_LOSS_LIMIT_PCT", "day"))

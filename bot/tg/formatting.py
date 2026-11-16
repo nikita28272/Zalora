@@ -675,6 +675,13 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float, week: li
         for title, sm in (("🔥 отмеченные боссом", hot), ("✅ с перевесом", pos), ("⚪ без перевеса", neg)):
             split.append(f"  {title}: " + (f"{sm.won} из {sm.count}, ROI {sm.roi:+.1%}" if sm else "пока нет"))
         parts.insert(4, "<b>Прогнозы босса по типу</b>\n" + "\n".join(split))
+    main = summarize([s for s in boss if s.pick_rank == 1], False)
+    second = summarize([s for s in boss if s.pick_rank == 2], False)
+    if main and second:
+        parts.insert(4, "<b>Главный прогноз и второй</b>\n"
+                     f"  №1 главный: {main.won} из {main.count} ({main.won / main.count:.0%}), ROI {main.roi:+.1%}\n"
+                     f"  №2 второй: {second.won} из {second.count} ({second.won / second.count:.0%}), "
+                     f"ROI {second.roi:+.1%}")
     total = summarize(all_time, real=False)
     if total is None or total.count < 50:
         parts.append("<i>Меньше 50 рассчитанных сигналов: результат пока во многом случаен.</i>")
@@ -739,6 +746,10 @@ def accuracy(all_time: list[Signal]) -> str:
             for c in ("high", "medium", "low") if any(s.confidence == c for s in rows)]
     if by_c:
         parts.append("<b>По уверенности</b>\n" + "\n".join(by_c))
+    by_rank = [_acc_line(label, [s for s in rows if s.pick_rank == r])
+               for r, label in ((1, "№1 главный"), (2, "№2 второй")) if any(s.pick_rank == r for s in rows)]
+    if len(by_rank) > 1:
+        parts.append("<b>Главный и второй прогноз</b>\n" + "\n".join(by_rank))
     hot = [s for s in rows if s.hot]
     if hot:
         parts.append("<b>Отмеченные 🔥</b>\n" + _acc_line("🔥", hot))

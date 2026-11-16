@@ -210,6 +210,10 @@ def plan_bet(p: float, odds: float, state: RiskState, cfg: Settings,
     block = risk_block(state, cfg)
     if block:
         return BetPlan(p, odds, ev, 0, 0, "не ставить", block, need, 0)
+    if p < cfg.min_stake_prob - 1e-9:
+        return BetPlan(p, odds, ev, 0, 0, "не ставить",
+                       f"шанс {p:.0%} ниже {cfg.min_stake_prob:.0%}: по нашей статистике такие прогнозы "
+                       "не окупаются — только на бумаге", need, own)
     if by_analysis:
         if confidence not in ("medium", "high"):
             return BetPlan(p, odds, ev, 0, 0, "на свой риск",

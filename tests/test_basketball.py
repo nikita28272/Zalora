@@ -170,7 +170,7 @@ def test_nba_dossier_verdict_and_settlement():
     assert "🏀 Баскетбол" in text and "ожидаемые очки" in text and "РЕЖИМ НБА: ПО АНАЛИЗУ" in text
     assert "ФАКТОРЫ ГРАФИКА" in text and "мораль" in text
     assert "hcp_home (Ф1(-5.5))" in text and "over (ТБ225.5)" in text
-    assert len(fmt.dossier_message(text)) < 4000
+    assert all(len(p) <= 4096 for p in fmt.dossier_parts(text))  # длинное досье уходит частями
 
     # по анализу: средняя уверенность — фиксированный 1% банка, даже без перевеса над линией
     top = engine.manual_top(num, [("hcp_home", 0.52), ("over", 0.5)], "medium")

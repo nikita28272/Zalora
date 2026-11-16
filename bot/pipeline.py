@@ -877,8 +877,9 @@ class Engine:
                 "перелёты», «статистика матчапа», «эксперты (зарубежные и РУ)», затем «адвоката дьявола».\n"
                 f"2. Каждый докладывает по всем исходам: {codes}.\n"
                 "3. Проверь факторы графика бота, оцени вероятность каждого исхода по фактам.\n"
-                f"4. Выбери ДВА исхода с самым сильным обоснованием и самым высоким шансом захода среди кэфов "
-                f"{settings.min_odds:.2f}–{settings.max_odds:.2f} (в том числе код@линия). Уверенность: high — 3+ "
+                f"4. Выбери ОДИН или ДВА исхода с самым сильным обоснованием и самым высоким шансом захода среди "
+                f"кэфов {settings.min_odds:.2f}–{settings.max_odds:.2f} (в том числе код@линия). Второй — только если "
+                f"его шанс не ниже {settings.min_stake_prob:.0%}, иначе дай один. Уверенность: high — 3+ "
                 "независимых фактора за и нет вопросов по составу; medium — 2 фактора; low — иначе.\n"
                 f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
                 f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
@@ -903,7 +904,8 @@ class Engine:
             +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
-            f"4. Выбери ДВА лучших исхода с кэфом {settings.min_odds:.2f}–{settings.max_odds:.2f} и самым высоким "
+            f"4. Выбери ОДИН или ДВА лучших исхода (второй — только с шансом от {settings.min_stake_prob:.0%}) "
+            f"с кэфом {settings.min_odds:.2f}–{settings.max_odds:.2f} и самым высоким "
             f"шансом захода (код@линия), среди них — с перевесом от {settings.min_edge:.0%}; если таких нет — "
             "с наибольшим перевесом из оставшихся. Последней строкой — команда для бота:\n"
             f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
@@ -1025,7 +1027,7 @@ class Engine:
             in_range = settings.min_odds <= odds <= settings.max_odds
             if by_analysis:
                 # НБА: ставка по силе разбора (уверенность босса), а не по перевесу над линией
-                positive = confidence in ("medium", "high") and in_range
+                positive = confidence in ("medium", "high") and in_range and p >= settings.min_stake_prob - 1e-9
                 if positive:
                     sd = flat_stake(state, settings, analysis_pct(p, confidence, settings))
                     stake, note = (sd.stake, f"по анализу: {sd.reason}") if sd.allowed else (
@@ -1038,7 +1040,7 @@ class Engine:
                 made.append(Pick(sel, p, p_market, odds, ev, round(1 / p, 2), positive, stake, note,
                                  line=line, estimated=estimated))
                 continue
-            positive = ev >= settings.min_edge and in_range
+            positive = ev >= settings.min_edge and in_range and p >= settings.min_stake_prob - 1e-9
             if positive:
                 sd = decide_stake(p, odds, state, settings)
                 if sd.allowed:
