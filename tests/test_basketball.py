@@ -439,6 +439,8 @@ def test_daily_picks_fixed_for_the_day():
     # до SCAN_TIME — предварительный список, не закрепляется
     engine.daily_picks(hockey, now=before.astimezone(timezone.utc))
     assert engine.daily_preliminary and db.get(f"daily_set:{engine.slate_key(now)}") is None
+    pre = fmt.daily_block(engine.daily_picks(hockey, now=before.astimezone(timezone.utc)), 4, preliminary=True)
+    assert "ПРЕДВАРИТЕЛЬНО" in pre and "не меняется" not in pre
     first = [m.event.event_id for m, _ in engine.daily_picks(hockey, now=now)]
     assert not engine.daily_preliminary
     assert len(first) == 2

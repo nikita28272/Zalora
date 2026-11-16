@@ -177,11 +177,14 @@ def hot_block(hot: list[Signal]) -> str:
     return "\n".join(lines)
 
 
-def daily_block(picks: list[tuple[MatchContext, str]], total: int) -> str:
+def daily_block(picks: list[tuple[MatchContext, str]], total: int, preliminary: bool = False) -> str:
     """Матчи дня к разбору: по 2 хоккея и НБА (и футбола, если есть) — с причиной выбора."""
     if not picks:
         return "🎯 <b>Матчи дня:</b> подходящих матчей нет."
-    lines = ["🎯 <b>Матчи дня к разбору</b>"]
+    lines = ["🎯 <b>Матчи дня к разбору — ПРЕДВАРИТЕЛЬНО</b>" if preliminary else "🎯 <b>Матчи дня к разбору</b>"]
+    if preliminary:
+        lines.append(f"⏳ <i>Травм и вратарей пока мало. В {settings.scan_time} бот выберет матчи дня заново "
+                     "по свежим данным и закрепит их до завтра.</i>")
     sport = None
     for m, why in picks:
         if m.sport.key != sport:
@@ -189,8 +192,9 @@ def daily_block(picks: list[tuple[MatchContext, str]], total: int) -> str:
             lines += ["", f"{m.sport.emoji} <b>{escape(m.event.league.name_ru)}</b>"]
         lines.append(f"<b>{m.idx}.</b> {local(m.event.kickoff):%d.%m %H:%M} {escape(m.title)}\n    {escape(why)}")
     lines += ["", "Нажмите 📋 с номером — придёт досье, его — в чат с Claude.",
-              f"<i>Набор на игровой день: до {settings.daily_rollover_hour}:00 завтра список не меняется. "
-              "✅ — уже разобран.</i>",
+              (f"<i>Список предварительный: досье лучше брать после {settings.scan_time}.</i>" if preliminary else
+               f"<i>Набор на игровой день: до {settings.daily_rollover_hour}:00 завтра список не меняется. "
+               "✅ — уже разобран.</i>"),
               "<i>🟢/🟡/⚪ — шанс найти перевес при разборе (модель против линии, для НБА — и график). "
               "Открывайте досье сверху вниз; ⚪ можно пропустить.</i>"]
     if total > len(picks):

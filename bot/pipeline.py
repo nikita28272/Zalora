@@ -1147,9 +1147,10 @@ class Engine:
         # закреплённый набор: {"ids": [...], "final": True}; старый формат (список) закреплён до сканера —
         # после SCAN_TIME выбираем заново
         stored = raw.get("ids", []) if isinstance(raw, dict) and raw.get("final") else []
-        if raw and not stored and self._before_scan(now):
-            stored = raw if isinstance(raw, list) else raw.get("ids", [])
         self.daily_preliminary = False
+        if raw and not stored and self._before_scan(now):  # выбран днём старой версией — пока показываем его же
+            stored = raw if isinstance(raw, list) else raw.get("ids", [])
+            self.daily_preliminary = True
         if stored:
             out = []
             for eid in stored:
