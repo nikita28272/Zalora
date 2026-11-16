@@ -208,7 +208,7 @@ class Settings:
 
     # --- расписание ---
     timezone: str = field(default_factory=lambda: _env("TIMEZONE", "Europe/Moscow"))
-    scan_time: str = field(default_factory=lambda: _env("SCAN_TIME", "11:00"))
+    scan_time: str = field(default_factory=lambda: _env("SCAN_TIME", "21:00"))
     settle_time: str = field(default_factory=lambda: _env("SETTLE_TIME", "11:00,15:00"))
 
     db_path: str = field(default_factory=lambda: _env("DB_PATH", "data/bot.db"))

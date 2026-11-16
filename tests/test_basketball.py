@@ -427,15 +427,20 @@ def test_daily_picks_fixed_for_the_day():
     from zoneinfo import ZoneInfo
     from bot.config import settings
     tz = ZoneInfo(settings.timezone)
-    start = (NOW.astimezone(tz) + timedelta(days=1)).replace(hour=settings.daily_rollover_hour, minute=5,
-                                                             second=0, microsecond=0)
-    now = start.astimezone(timezone.utc)
+    sh, sm = (int(x) for x in settings.scan_time.split(":"))
+    day = NOW.astimezone(tz) + timedelta(days=1)
+    before = day.replace(hour=settings.daily_rollover_hour, minute=5, second=0, microsecond=0)
+    now = day.replace(hour=sh, minute=sm, second=0, microsecond=0).astimezone(timezone.utc)  # время сканера
     hockey = []
     for i in range(4):
         c = hockey_ctx(now + timedelta(hours=10 + i))
         c.idx, c.event.event_id = i + 1, f"h{i}"
         hockey.append(c)
+    # до SCAN_TIME — предварительный список, не закрепляется
+    engine.daily_picks(hockey, now=before.astimezone(timezone.utc))
+    assert engine.daily_preliminary and db.get(f"daily_set:{engine.slate_key(now)}") is None
     first = [m.event.event_id for m, _ in engine.daily_picks(hockey, now=now)]
+    assert not engine.daily_preliminary
     assert len(first) == 2
     # разобрали первый матч, линия обновилась, прошло 3 часа — набор тот же, разобранный помечен
     num = engine.save_candidate(next(m for m in hockey if m.event.event_id == first[0]))

@@ -1141,6 +1141,7 @@ class Engine:
         done = self.analyzed_events()
         key = f"daily_set:{self.slate_key(now)}"
         stored = self.db.get(key) or []
+        self.daily_preliminary = False
         if stored:
             out = []
             for eid in stored:
@@ -1167,9 +1168,20 @@ class Engine:
                 ranked.append(((m.event.kickoff > soon, -level, -prob, -score), m, chance + " · " + why))
             ranked.sort(key=lambda x: x[0])
             out += [(m, why) for _, m, why in ranked[:quota[sport]]]
-        if out:
+        # до SCAN_TIME (обычно вечером) набор предварительный: травм и вратарей ещё мало —
+        # не закрепляем, в SCAN_TIME бот выберет заново по свежим данным
+        self.daily_preliminary = self._before_scan(now)
+        if out and not self.daily_preliminary:
             self.db.set(key, [m.event.event_id for m, _ in out])
         return out
+
+    @staticmethod
+    def _before_scan(now: datetime) -> bool:
+        h, mnt = (int(x) for x in settings.scan_time.split(":"))
+        t = local(now)
+        minutes, scan = t.hour * 60 + t.minute, h * 60 + mnt
+        start = settings.daily_rollover_hour * 60
+        return start <= minutes < scan if start <= scan else (minutes >= start or minutes < scan)
 
     @staticmethod
     def edge_chance(m: MatchContext) -> tuple[int, str]:

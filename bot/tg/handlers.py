@@ -352,6 +352,9 @@ async def send_daily(bot: Bot, chat_id: int, engine: Engine, matches, title: str
     """Матчи дня (2 хоккея, 2 НБА, 2 футбола) с кнопками; полный список — по кнопке."""
     picks = engine.daily_picks(matches)
     text = (title + "\n\n" if title else "") + fmt.daily_block(picks, len(matches))
+    if getattr(engine, "daily_preliminary", False):
+        text += (f"\n\n⏳ <i>Это предварительный список: травм и вратарей пока мало. В {settings.scan_time} "
+                 "бот выберет матчи дня заново по свежим данным и закрепит их до завтра.</i>")
     hot = fmt.hot_block(engine.db.hot_open())
     if hot:
         text = hot + "\n\n" + text
