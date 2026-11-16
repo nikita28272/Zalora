@@ -483,6 +483,9 @@ class Engine:
         at = datetime.fromisoformat(raw) if raw else None
         hours = settings.daily_reuse_hours
         if hours > 0 and at is not None and local(at).date() == local(now).date() and now - at <= timedelta(hours=hours):
+            # после SCAN_TIME дневные линии (загруженные задолго до сканера) не берём: вечером нужна свежая линия
+            if not self._before_scan(now) and at < self.scan_at(now) - timedelta(hours=1):
+                return settings.odds_scan_max_age_minutes
             return hours * 60
         return settings.odds_scan_max_age_minutes
 
@@ -1140,7 +1143,12 @@ class Engine:
         pool_all = {m.event.event_id: m for m in (self.matches if matches is None else matches)}
         done = self.analyzed_events()
         key = f"daily_set:{self.slate_key(now)}"
-        stored = self.db.get(key) or []
+        raw = self.db.get(key)
+        # закреплённый набор: {"ids": [...], "final": True}; старый формат (список) закреплён до сканера —
+        # после SCAN_TIME выбираем заново
+        stored = raw.get("ids", []) if isinstance(raw, dict) and raw.get("final") else []
+        if raw and not stored and self._before_scan(now):
+            stored = raw if isinstance(raw, list) else raw.get("ids", [])
         self.daily_preliminary = False
         if stored:
             out = []
@@ -1172,8 +1180,17 @@ class Engine:
         # не закрепляем, в SCAN_TIME бот выберет заново по свежим данным
         self.daily_preliminary = self._before_scan(now)
         if out and not self.daily_preliminary:
-            self.db.set(key, [m.event.event_id for m, _ in out])
+            self.db.set(key, {"ids": [m.event.event_id for m, _ in out], "final": True})
         return out
+
+    def scan_at(self, now: datetime) -> datetime:
+        """Ближайший прошедший момент SCAN_TIME (UTC) для текущего игрового дня."""
+        h, mnt = (int(x) for x in settings.scan_time.split(":"))
+        t = local(now)
+        at = t.replace(hour=h, minute=mnt, second=0, microsecond=0)
+        if at > t:
+            at -= timedelta(days=1)
+        return at.astimezone(timezone.utc)
 
     @staticmethod
     def _before_scan(now: datetime) -> bool:

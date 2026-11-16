@@ -450,3 +450,27 @@ def test_daily_picks_fixed_for_the_day():
     # следующий игровой день — новый набор
     nxt = engine.daily_picks(hockey, now=now + timedelta(days=1))
     assert first[0] not in [m.event.event_id for m, _ in nxt]
+
+
+def test_daily_set_chosen_early_is_reselected_at_scan_time():
+    import sys
+    sys.path.insert(0, "tests")
+    from zoneinfo import ZoneInfo
+    from test_hockey import _ctx as hockey_ctx
+    from bot.config import settings
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    tz = ZoneInfo(settings.timezone)
+    sh, sm = (int(x) for x in settings.scan_time.split(":"))
+    day = NOW.astimezone(tz) + timedelta(days=1)
+    scan = day.replace(hour=sh, minute=sm, second=0, microsecond=0).astimezone(timezone.utc)
+    hockey = []
+    for i in range(4):
+        c = hockey_ctx(scan + timedelta(hours=10 + i))
+        c.idx, c.event.event_id = i + 1, f"h{i}"
+        hockey.append(c)
+    # старая версия закрепила набор днём (просто список) — после сканера бот выбирает заново и закрепляет
+    db.set(f"daily_set:{engine.slate_key(scan)}", ["h3", "h2"])
+    ids = [m.event.event_id for m, _ in engine.daily_picks(hockey, now=scan)]
+    assert ids != ["h3", "h2"] and db.get(f"daily_set:{engine.slate_key(scan)}")["final"]
