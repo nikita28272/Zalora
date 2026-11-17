@@ -31,12 +31,15 @@ from .analysis.bankroll import (StakeDecision, analysis_pct, decide_stake, edge,
                                 min_acceptable_odds, risk_mode, round_stake)
 from .analysis.market import MarketView, market_view
 from .analysis.altlines import alt_market, safe_options, safe_text
+from .analysis.derived import derived_text
 from .analysis.basketball import NbaModel
 from .analysis.nba_factors import Factors, nba_factors
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, RISK_NAMES_RU, League, settings
 from .data import news
 from .data.injuries import Injury, InjuryClient
+from .data.nhl import espn_first_periods
+from .watch import Condition, condition_met, diff_injuries
 from .data.nba import NbaClient, standings_from_results
 from .data.nba import season_start as nba_season_start
 from .data.nhl import NhlClient
@@ -45,7 +48,7 @@ from .data.odds import Event, OddsClient, Quota, ScanReport
 from .data.stats import Result, StandingRow, StatsClient, football_season_start
 from .data.teams import best_match
 from .db import DB, PAPER_UNIT, Signal
-from .sports import FOOTBALL, SPORTS, Sport, group_of, line_for, sel_ru, sel_short
+from .sports import DERIVED, FOOTBALL, SPORTS, Sport, group_of, line_for, sel_ru, sel_short
 
 log = logging.getLogger(__name__)
 
@@ -78,6 +81,18 @@ def settle_outcome(sport_key: str, selection: str, line: float | None, r: Result
         if total == ln:
             return "void"
         return "won" if (total > ln) == (selection == "over") else "lost"
+    if selection in DERIVED:
+        if selection.startswith("p1_"):
+            if r.p1 is None:
+                raise LookupError("нет счёта 1-го периода / половины")
+            value = r.p1[0] + r.p1[1]
+        else:
+            value = fh if selection.startswith("it1") else fa
+        if line is None:
+            raise ValueError(f"Нет линии для {selection}")
+        if value == line:
+            return "void"
+        return "won" if (value > line) == selection.endswith("_over") else "lost"
     if selection in ("hcp_home", "hcp_away"):
         diff = (fh - fa) if selection == "hcp_home" else (fa - fh)
         ln = line if line is not None else -1.5
@@ -364,6 +379,16 @@ class Pick:
     estimated: bool = False  # кэф оценочный (запасная линия / двойной шанс)
     rank: int = 0
     signal_id: int | None = None
+
+
+@dataclass
+class NewsAlert:
+    """Новость сторожа: что изменилось в отчёте о травмах и какие условия босса сработали."""
+    num: int
+    ctx: "MatchContext"
+    changes: list[tuple[str, str, str | None, str | None]]  # команда, игрок, было, стало
+    fired: list[tuple[int, "Condition"]]
+    picks: list[Signal]
 
 
 @dataclass
@@ -918,6 +943,7 @@ class Engine:
                 ctx.numbers(),
                 ctx.injuries_text(),
                 safe_text(ctx),
+                derived_text(ctx, settings.min_stake_ev),
                 self.finance_report(),
                 "РЕЖИМ НБА: ПО АНАЛИЗУ (не по перевесу над линией).",
                 "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md, раздел «НБА: работа по анализу»:\n"
@@ -925,13 +951,18 @@ class Engine:
                 "перелёты», «статистика матчапа», «эксперты (зарубежные и РУ)», затем «адвоката дьявола».\n"
                 f"2. Каждый докладывает по всем исходам: {codes}.\n"
                 "3. Проверь факторы графика бота, оцени вероятность каждого исхода по фактам.\n"
+                "   Доп. рынки (блок «ДОП. РЫНКИ»): индивидуальные тоталы и тотал 1-го периода/половины — можно выбрать, "
+                "если факты дают там перевес (травма лидера → ИТ его команды меньше; вратарь-новичок → ИТ соперника "
+                "больше). Код всегда с линией: it1_over@2.5.\n"
                 f"4. Выбери ОДИН или ДВА исхода с самым сильным обоснованием и самым высоким шансом захода среди "
                 f"кэфов {settings.min_odds:.2f}–{settings.max_odds:.2f} (в том числе код@линия). Ставка — если шанс × кэф "
                 f"≥ {1 + settings.min_stake_ev:.2f} (лучше основная линия по кэфу ~1.9, чем запас по ≈1.72). Второй "
                 f"исход — только если он тоже проходит это правило, иначе дай один. Уверенность: high — 3+ "
                 "независимых фактора за и нет вопросов по составу; medium — 2 фактора; low — иначе.\n"
                 f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
-                f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
+                f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}"
+                + ("|it1_over|it1_under|it2_over|it2_under|p1_over|p1_under (доп. — с @линией)"
+                   if ctx.sport.key in ("hockey", "basketball") else "") + ".",
             ] if x)
         return "\n\n".join(x for x in [
             f"ДОСЬЕ #{num} ДЛЯ БОССА",
@@ -939,6 +970,7 @@ class Engine:
             ctx.numbers(),
             ctx.injuries_text(),
             safe_text(ctx),
+            derived_text(ctx, settings.min_stake_ev),
             self.finance_report(),
             cand,
             "ЗАДАНИЕ БОССУ (Claude), подробно — в BOSS.md репозитория nikita28272/Zalora:\n"
@@ -954,13 +986,18 @@ class Engine:
             +
             f"3. Оцени вероятность каждого исхода; от рынка дальше {settings.max_prob_deviation:.0%} не уходи "
             "без веской причины.\n"
+            "   Доп. рынки (блок «ДОП. РЫНКИ»): индивидуальные тоталы и тотал 1-го периода/половины — можно выбрать, "
+            "если факты дают там перевес (травма лидера → ИТ его команды меньше; вратарь-новичок → ИТ соперника "
+            "больше). Код всегда с линией: it1_over@2.5.\n"
             f"4. Выбери ОДИН или ДВА лучших исхода (ставка — если шанс × кэф ≥ {1 + settings.min_stake_ev:.2f}; "
             f"второй — только если тоже проходит) "
             f"с кэфом {settings.min_odds:.2f}–{settings.max_odds:.2f} и самым высоким "
             f"шансом захода (код@линия), среди них — с перевесом от {settings.min_edge:.0%}; если таких нет — "
             "с наибольшим перевесом из оставшихся. Последней строкой — команда для бота:\n"
             f"/verdict {num} <исход1> <вероятность1> <исход2> <вероятность2> <low|medium|high>\n"
-            f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}.",
+            f"Коды исходов: {'|'.join(o for o in ctx.sport.outcomes if o in ctx.market.fair)}"
+                + ("|it1_over|it1_under|it2_over|it2_under|p1_over|p1_under (доп. — с @линией)"
+                   if ctx.sport.key in ("hockey", "basketball") else "") + ".",
         ] if x)
 
     async def candidates(self) -> tuple[list[MatchContext], list[tuple[int, MatchContext]]]:
@@ -1013,6 +1050,8 @@ class Engine:
         alt = {}  # код -> (честная вероятность, оценочный кэф, линия)
         main = []
         for sel, p, line in picks:
+            if sel in DERIVED and line is None:
+                raise ValueError(f"Для доп. рынка «{sel}» нужна линия: например {sel}@2.5.")
             if sel in ("dc_home", "dc_away") or (line is not None and line != ctx.line(sel)):
                 got = alt_market(ctx, sel, line)
                 if got is None:
@@ -1338,6 +1377,107 @@ class Engine:
         return picked[:settings.nba_top]
 
     # ---------- поздняя проверка ----------
+    # ---------- сторож новостей и условия босса ----------
+    def add_condition(self, c: Condition) -> MatchContext:
+        """«/if»: условие босса на матч из досье (проверяется сторожем новостей)."""
+        ctx = self.load_candidate(c.num)
+        if ctx is None:
+            raise ValueError(f"Досье #{c.num} не найдено (или устарело).")
+        if ctx.event.kickoff <= datetime.now(timezone.utc):
+            raise ValueError("Матч уже начался: условие не записываю.")
+        if ctx.sport.key not in ("hockey", "basketball"):
+            raise ValueError("Сторож новостей работает только по НХЛ и НБА (отчёт о травмах ESPN).")
+        group_of(ctx.sport, c.selection)  # исход подходит виду спорта
+        if c.selection in DERIVED and c.line is None:
+            raise ValueError(f"Для доп. рынка нужна линия: {c.selection}@2.5.")
+        key = f"cond:{ctx.event.event_id}"
+        conds = self.db.get(key) or []
+        conds.append(c.as_dict())
+        self.db.set(key, conds)
+        return ctx
+
+    def conditions(self, num: int) -> list[Condition]:
+        ctx = self.load_candidate(num)
+        if ctx is None:
+            return []
+        return [Condition.from_dict(d) for d in (self.db.get(f"cond:{ctx.event.event_id}") or [])]
+
+    def clear_conditions(self, num: int) -> int:
+        ctx = self.load_candidate(num)
+        if ctx is None:
+            return 0
+        n = len(self.db.get(f"cond:{ctx.event.event_id}") or [])
+        self.db.delete(f"cond:{ctx.event.event_id}")
+        return n
+
+    def apply_condition(self, num: int, idx: int) -> TopPicks:
+        conds = self.conditions(num)
+        if not 0 <= idx < len(conds):
+            raise ValueError("Условие не найдено.")
+        c = conds[idx]
+        pick = (c.selection, c.prob, c.line) if c.line is not None else (c.selection, c.prob)
+        return self.manual_top(num, [pick], c.confidence)
+
+    async def condition_now(self, c: Condition) -> bool:
+        """Выполнено ли условие прямо сейчас (по свежему отчёту о травмах)."""
+        ctx = self.load_candidate(c.num)
+        if ctx is None:
+            return False
+        inj = await self.injuries.fetch(ctx.sport.key, max_age=60)
+        teams = [inj.get(k, []) for t in (ctx.event.home_team, ctx.event.away_team)
+                 if (k := best_match(t, inj.keys()))]
+        return bool(teams) and condition_met(c, teams)
+
+    async def news_watch(self, now: datetime | None = None) -> list[NewsAlert]:
+        """Изменения в отчётах о травмах по матчам с прогнозом босса + сработавшие условия босса."""
+        now = now or datetime.now(timezone.utc)
+        horizon = now + timedelta(hours=settings.news_watch_hours)
+        events: dict[str, list[Signal]] = {}
+        for s in self.db.pending():
+            if s.source == "boss" and s.sport in ("hockey", "basketball") and now < s.kickoff <= horizon:
+                events.setdefault(s.event_id, []).append(s)
+        alerts: list[NewsAlert] = []
+        reports: dict[str, dict[str, list[Injury]]] = {}
+        for eid, picks in events.items():
+            num = self.num_for_event(eid)
+            ctx = self.load_candidate(num) if num is not None else None
+            if ctx is None:
+                continue
+            sport = ctx.sport.key
+            if sport not in reports:
+                reports[sport] = await self.injuries.fetch(sport, max_age=max(60, settings.news_watch_minutes * 60 - 30))
+            inj = reports[sport]
+            if not inj:  # отчёт недоступен — ничего не сравниваем, чтобы не прислать ложных новостей
+                continue
+            seen = self.db.get(f"news_seen:{eid}") or {
+                "home": {i.name: i.status for i in ctx.home_inj},
+                "away": {i.name: i.status for i in ctx.away_inj},
+            }
+            cur: dict[str, dict[str, str]] = {}
+            teams: list[list[Injury]] = []
+            changes: list[tuple[str, str, str | None, str | None]] = []
+            for side, team in (("home", ctx.event.home_team), ("away", ctx.event.away_team)):
+                key = best_match(team, inj.keys())
+                if key is None:  # команды нет в отчёте — оставляем как было
+                    cur[side] = seen.get(side, {})
+                    teams.append([Injury(n, st) for n, st in cur[side].items()])
+                    continue
+                cur[side] = {i.name: i.status for i in inj[key]}
+                teams.append(inj[key])
+                changes += [(team, n, old, new) for n, old, new in diff_injuries(seen.get(side, {}), cur[side])]
+            conds = [Condition.from_dict(d) for d in (self.db.get(f"cond:{eid}") or [])]
+            fired = []
+            for i, c in enumerate(conds):
+                if not c.fired and condition_met(c, teams):
+                    c.fired = True
+                    fired.append((i, c))
+            if fired:
+                self.db.set(f"cond:{eid}", [c.as_dict() for c in conds])
+            self.db.set(f"news_seen:{eid}", cur)
+            if changes or fired:
+                alerts.append(NewsAlert(num, ctx, changes, fired, picks))
+        return alerts
+
     def num_for_event(self, event_id: str) -> int | None:
         return self.db.get(f"cand_event:{event_id}")
 
@@ -1495,9 +1635,18 @@ class Engine:
                 start = end + timedelta(days=1)
         if any(s.sport == "hockey" for s in due):
             try:
-                finished.extend(await self.nhl.finished_between(date_from, date_to))
+                nhl_done = await self.nhl.finished_between(date_from, date_to)
             except Exception as exc:  # noqa: BLE001
                 log.warning("NHL API: результаты недоступны: %s", type(exc).__name__)
+                nhl_done = []
+            if nhl_done and any(s.sport == "hockey" and s.selection.startswith("p1_") for s in due):
+                periods = await espn_first_periods(date_from, date_to)
+                for r in nhl_done:  # счёт 1-го периода — из табло ESPN (в расписании НХЛ его нет)
+                    hit = next((p for p in periods if abs((p[0] - r.utc_date).total_seconds()) < 12 * 3600
+                                and best_match(r.home, [p[1]]) and best_match(r.away, [p[2]])), None)
+                    if hit:
+                        r.p1 = (hit[3], hit[4])
+            finished.extend(nhl_done)
         if any(s.sport == "basketball" for s in due):
             try:
                 finished.extend(await self.nba.finished_between(date_from, date_to))
@@ -1518,7 +1667,13 @@ class Engine:
                     self.db.settle(s.id, "void", "нет данных", 0.0, 0.0)
                     settled.append(self.db.signal(s.id))
                 continue
-            outcome = settle_outcome(s.sport, s.selection, s.line, res)
+            try:
+                outcome = settle_outcome(s.sport, s.selection, s.line, res)
+            except LookupError:  # нет счёта периода: подождём следующего расчёта, через 5 дней — возврат
+                if now - s.kickoff > timedelta(days=5):
+                    self.db.settle(s.id, "void", "нет данных", 0.0, 0.0)
+                    settled.append(self.db.signal(s.id))
+                continue
             if outcome == "void":
                 paper = real = 0.0
             else:

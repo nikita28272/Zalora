@@ -20,6 +20,7 @@ from aiogram.types import (
 from ..analysis.bankroll import plan_bet
 from ..config import RISK_NAMES_RU, settings
 from ..db import DB, month_start_utc, week_start_utc
+from ..watch import parse_condition
 from ..pipeline import AnalysisResult, Engine
 from . import formatting as fmt
 
@@ -102,16 +103,28 @@ _SEL_ALIASES = {
     # двойной шанс (футбол)
     "dc_home": "dc_home", "1x": "dc_home", "1х": "dc_home",
     "dc_away": "dc_away", "x2": "dc_away", "х2": "dc_away",
+    # доп. рынки (хоккей, баскетбол) — всегда с линией: it1_over@2.5, p1_under@1.5
+    "it1_over": "it1_over", "it1_under": "it1_under", "it2_over": "it2_over", "it2_under": "it2_under",
+    "p1_over": "p1_over", "p1_under": "p1_under",
 }
 _CONF_ALIASES = {
     "low": "low", "низкая": "low", "medium": "medium", "средняя": "medium", "high": "high", "высокая": "high",
 }
+IF_USAGE = (
+    "Условие босса — ставка на случай новости о составе (сторож проверяет отчёт о травмах каждые "
+    f"{settings.news_watch_minutes} минут, ночью {settings.news_quiet_hours} молчит):\n"
+    "<code>/if НОМЕР_ДОСЬЕ ИГРОК out|in ИСХОД ВЕРОЯТНОСТЬ [УВЕРЕННОСТЬ]</code>\n"
+    "Например: <code>/if 38 Scottie Barnes out under@215.5 0.57 low</code> — если Барнс не играет, "
+    "прогноз ТМ215.5 с шансом 57%.\n"
+    "out — не играет, in — играет. Список условий: <code>/if 38</code>, удалить: <code>/if 38 off</code>."
+)
 VERDICT_USAGE = (
     "Формат: <code>/verdict НОМЕР_ДОСЬЕ ИСХОД1 ВЕРОЯТНОСТЬ1 ИСХОД2 ВЕРОЯТНОСТЬ2 [УВЕРЕННОСТЬ]</code>\n"
     "Например: <code>/verdict 7 home 0.54 under 0.56 medium</code>\n"
     "Исход — код из досье: home/draw/away/over/under, в хоккее ещё ml_home/ml_away/hcp_home/hcp_away.\n"
     "Вероятность: 0.54 или 54%. Можно и один исход.\n"
     "Линия с запасом: <code>hcp_home@+12.5</code>, <code>under@225.5</code>; двойной шанс: <code>1x</code>, <code>x2</code>.\n"
+    "Доп. рынки (всегда с линией): <code>it1_over@2.5</code>, <code>it2_under@110.5</code>, <code>p1_over@1.5</code>.\n"
     "🔥 в конце: <code>fire</code> — на первый исход, <code>fire2</code> — на оба."
 )
 
@@ -940,6 +953,56 @@ def build_routers(engine: Engine, db: DB) -> list[Router]:
             .replace(",", " ")
         )
 
+    @owner.message(Command("if"))
+    async def cmd_if(message: Message, command: CommandObject) -> None:
+        args = (command.args or "").strip()
+        parts = args.replace("#", " ").split()
+        if not parts or not parts[0].isdigit():
+            await message.answer(IF_USAGE)
+            return
+        num = int(parts[0])
+        if len(parts) == 1:
+            conds = engine.conditions(num)
+            ctx = engine.load_candidate(num)
+            if not conds or ctx is None:
+                await message.answer(f"По досье #{num} условий нет.\n\n{IF_USAGE}")
+                return
+            await message.answer(fmt.conditions_list(ctx, num, conds))
+            return
+        if len(parts) == 2 and parts[1].lower() in ("off", "clear", "удалить", "нет"):
+            n = engine.clear_conditions(num)
+            await message.answer(f"Условия по досье #{num} удалены: {n}.")
+            return
+        cond = parse_condition(args, _SEL_ALIASES, _CONF_ALIASES, _parse_prob)
+        if isinstance(cond, str):
+            await message.answer(f"Не понял условие: {fmt.escape(cond)}.\n\n{IF_USAGE}")
+            return
+        try:
+            ctx = engine.add_condition(cond)
+        except ValueError as exc:
+            await message.answer(str(exc))
+            return
+        text = fmt.condition_saved(ctx, cond)
+        idx = len(engine.conditions(num)) - 1
+        kb = None
+        if await engine.condition_now(cond):
+            text += "\n\n⚡ Условие выполнено уже сейчас — можно применить сразу."
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+                text=f"✅ Применить: {fmt.escape_btn(fmt.cond_label(ctx, cond))}", callback_data=f"cond:{num}:{idx}")]])
+        await message.answer(text, reply_markup=kb)
+
+    @owner.callback_query(F.data.startswith("cond:"))
+    async def on_cond(cb: CallbackQuery) -> None:
+        _, num, idx = cb.data.split(":")
+        try:
+            top = engine.apply_condition(int(num), int(idx))
+        except ValueError as exc:
+            await cb.answer(str(exc)[:190], show_alert=True)
+            return
+        await cb.answer("Прогноз заменён")
+        await cb.message.answer(fmt.top_picks(top, db.bankroll()),
+                                reply_markup=picks_keyboard([db.signal(p.signal_id) for p in top.picks], int(num)))
+
     @owner.callback_query(F.data.startswith("late:"))
     async def on_late(cb: CallbackQuery) -> None:
         await cb.answer()
@@ -1274,9 +1337,9 @@ async def run_daily(bot: Bot, engine: Engine, chat_id: int) -> None:
         await run_morning_matches(bot, engine, chat_id)
 
 
-def _quiet_now(now_local: datetime) -> bool:
+def _quiet_now(now_local: datetime, raw: str | None = None) -> bool:
     """QUIET_HOURS «0-7»: с 00:00 до 07:00 напоминаний нет (бывает и «23-7»)."""
-    raw = settings.quiet_hours.strip()
+    raw = (settings.quiet_hours if raw is None else raw).strip()
     if not raw:
         return False
     try:
@@ -1317,3 +1380,24 @@ async def run_late_checks(bot: Bot, engine: Engine, chat_id: int) -> None:
             head += "\n❔ Есть прогноз без отметки: проверьте и решите — «Сделал» или «Не ставил»."
         await bot.send_message(chat_id, head + "\nСкопируйте блок ниже в чат с Claude.")
         await send_dossier(bot, chat_id, text)
+
+
+def news_keyboard(alert) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=f"✅ Применить: {fmt.escape_btn(fmt.cond_label(alert.ctx, c))}",
+                                  callback_data=f"cond:{alert.num}:{i}")] for i, c in alert.fired]
+    rows.append([InlineKeyboardButton(text="🥅 Поздняя проверка", callback_data=f"late:{alert.num}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def run_news_watch(bot: Bot, engine: Engine, chat_id: int) -> None:
+    """Каждые NEWS_WATCH_MINUTES: новости о травмах по матчам с прогнозом босса и условия босса.
+    Ночью (NEWS_QUIET_HOURS) — молчим и не запоминаем: утром придёт всё, что изменилось."""
+    if _quiet_now(fmt.local(fmt.now_utc()), settings.news_quiet_hours):
+        return
+    try:
+        alerts = await engine.news_watch()
+    except Exception:  # noqa: BLE001
+        log.exception("news watch failed")
+        return
+    for a in alerts:
+        await bot.send_message(chat_id, fmt.news_alert(a), reply_markup=news_keyboard(a))

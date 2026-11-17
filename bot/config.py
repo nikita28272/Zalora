@@ -182,6 +182,11 @@ class Settings:
     late_check_football_minutes: int = field(default_factory=lambda: _int("LATE_CHECK_FOOTBALL_MINUTES", 50))
     # Тихие часы для напоминаний: «0-7» — не присылать с 00:00 до 07:00 по TIMEZONE; пусто (по умолчанию) — присылать всегда
     quiet_hours: str = field(default_factory=lambda: _env("QUIET_HOURS", ""))
+    # Сторож новостей: раз в N минут сверяет отчёт о травмах ESPN по матчам с прогнозом босса (кредиты не тратит)
+    news_watch_minutes: int = field(default_factory=lambda: _int("NEWS_WATCH_MINUTES", 10))
+    news_watch_hours: int = field(default_factory=lambda: _int("NEWS_WATCH_HOURS", 24))  # матчи на сколько часов вперёд
+    # Ночью сторож молчит («0-8» — с 00:00 до 08:00 по TIMEZONE), утром присылает всё, что изменилось за ночь
+    news_quiet_hours: str = field(default_factory=lambda: _env("NEWS_QUIET_HOURS", "0-8"))
 
     # --- банкролл и лимиты (финансист) ---
     start_bankroll: float = field(default_factory=lambda: _float("START_BANKROLL", 10000))

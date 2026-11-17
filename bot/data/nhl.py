@@ -152,3 +152,40 @@ class NhlClient:
 
     async def finished_between(self, date_from: date, date_to: date) -> list[Result]:
         return await self.games_between(date_from - timedelta(days=6), date_to)
+
+
+ESPN_SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard"
+
+
+def parse_espn_first_periods(data: dict) -> list[tuple[datetime, str, str, int, int]]:
+    """Табло ESPN -> [(время, хозяева, гости, голы хозяев в 1-м периоде, голы гостей)] по завершённым матчам."""
+    out = []
+    for ev in (data or {}).get("events") or []:
+        try:
+            comp = ev["competitions"][0]
+            if not ((comp.get("status") or ev.get("status") or {}).get("type") or {}).get("completed"):
+                continue
+            sides = {c.get("homeAway"): c for c in comp["competitors"]}
+            h, a = sides["home"], sides["away"]
+            lh, la = h.get("linescores") or [], a.get("linescores") or []
+            if not lh or not la:
+                continue
+            when = datetime.fromisoformat(str(ev["date"]).replace("Z", "+00:00"))
+            out.append((when, str(h["team"].get("displayName")), str(a["team"].get("displayName")),
+                        int(float(lh[0].get("value"))), int(float(la[0].get("value")))))
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    return out
+
+
+async def espn_first_periods(start: date, end: date) -> list[tuple[datetime, str, str, int, int]]:
+    """Счёт 1-го периода матчей НХЛ за даты (ESPN, бесплатно) — для расчёта ставок на 1-й период."""
+    url = f"{ESPN_SCOREBOARD}?dates={start:%Y%m%d}-{end:%Y%m%d}&limit=300"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return parse_espn_first_periods(resp.json())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ESPN NHL: счёт периодов недоступен: %s", type(exc).__name__)
+        return []

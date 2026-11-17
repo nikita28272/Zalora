@@ -17,7 +17,7 @@ import math
 from dataclasses import dataclass
 from statistics import NormalDist
 
-from ..sports import sel_short
+from ..sports import DERIVED, sel_short
 
 from ..config import settings
 
@@ -82,6 +82,10 @@ def alt_market(ctx, selection: str, line: float | None) -> tuple[float, float] |
     """Честная вероятность и оценочный кэф для запасной линии или двойного шанса; None — посчитать нельзя."""
     sport = ctx.sport.key
     fair = ctx.market.fair
+    if selection in DERIVED:
+        from .derived import derived_market
+
+        return derived_market(ctx, selection, line)
     if sport == "football" and selection in ("dc_home", "dc_away"):
         side = "home" if selection == "dc_home" else "away"
         if side not in fair or "draw" not in fair:

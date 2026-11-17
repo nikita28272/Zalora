@@ -61,11 +61,12 @@ def parse_event(ev: dict) -> Result | None:
         period = _int(status.get("period")) or 4
         decided = "OT" if period > 4 else "REG"
         rh, ra = fh, fa
-        if decided == "OT":
-            qh = [_int(q.get("value")) for q in home.get("linescores") or []][:4]
-            qa = [_int(q.get("value")) for q in away.get("linescores") or []][:4]
-            if len(qh) == 4 and len(qa) == 4 and None not in qh and None not in qa:
-                rh, ra = sum(qh), sum(qa)
+        qh = [_int(q.get("value")) for q in home.get("linescores") or []][:4]
+        qa = [_int(q.get("value")) for q in away.get("linescores") or []][:4]
+        quarters_ok = len(qh) == 4 and len(qa) == 4 and None not in qh and None not in qa
+        if decided == "OT" and quarters_ok:
+            rh, ra = sum(qh), sum(qa)
+        p1 = (qh[0] + qh[1], qa[0] + qa[1]) if quarters_ok else None
         when = datetime.fromisoformat(str(ev["date"]).replace("Z", "+00:00"))
         if when.tzinfo is None:
             when = when.replace(tzinfo=timezone.utc)
@@ -80,6 +81,7 @@ def parse_event(ev: dict) -> Result | None:
             final_home=fh,
             final_away=fa,
             decided=decided,
+            p1=p1,
         )
     except (KeyError, IndexError, TypeError, ValueError):
         return None

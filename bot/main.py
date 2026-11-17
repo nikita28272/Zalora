@@ -18,7 +18,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 from .config import settings
 from .db import DB
 from .pipeline import Engine
-from .tg.handlers import build_routers, main_keyboard, run_backup, run_daily, run_late_checks, run_settle
+from .tg.handlers import (build_routers, main_keyboard, run_backup, run_daily, run_late_checks, run_news_watch,
+                          run_settle)
 
 COMMANDS = [
     BotCommand(command="matches", description="Ближайшие матчи"),
@@ -26,6 +27,7 @@ COMMANDS = [
     BotCommand(command="scan", description="Кандидаты или сигналы сейчас"),
     BotCommand(command="verdict", description="Вердикт босса: /verdict 7 home 0.54 under 0.56"),
     BotCommand(command="check", description="Поздняя проверка перед матчем: /check 7"),
+    BotCommand(command="if", description="Условие босса: /if 38 Игрок out under 0.57"),
     BotCommand(command="fire", description="Поставить или снять 🔥 у прогноза: /fire 9"),
     BotCommand(command="signals", description="Открытые сигналы"),
     BotCommand(command="stats", description="Статистика журнала"),
@@ -62,6 +64,10 @@ def schedule_jobs(scheduler: AsyncIOScheduler, bot, engine, db) -> None:
     # копия базы владельцу — каждый понедельник в 12:00
     scheduler.add_job(run_backup, CronTrigger(day_of_week="mon", hour=12, minute=0, timezone=settings.timezone),
                       args=[bot, db, settings.owner_id], id="backup", **common)
+    # сторож новостей: отчёт о травмах ESPN по матчам с прогнозом босса (кредиты Odds API не тратит)
+    scheduler.add_job(run_news_watch, IntervalTrigger(minutes=settings.news_watch_minutes),
+                      args=[bot, engine, settings.owner_id], id="news", misfire_grace_time=300,
+                      coalesce=True, max_instances=1)
     if not settings.api_mode:  # напоминания о поздней проверке — только в режиме «босс в чате»
         scheduler.add_job(run_late_checks, IntervalTrigger(minutes=10), args=[bot, engine, settings.owner_id],
                           id="late", misfire_grace_time=300, coalesce=True, max_instances=1)

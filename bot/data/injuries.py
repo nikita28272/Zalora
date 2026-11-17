@@ -81,12 +81,12 @@ class InjuryClient:
         self.timeout = timeout
         self._cache: dict[str, tuple[float, dict[str, list[Injury]]]] = {}
 
-    async def fetch(self, sport: str) -> dict[str, list[Injury]]:
+    async def fetch(self, sport: str, max_age: float = CACHE_SECONDS) -> dict[str, list[Injury]]:
         url = URLS.get(sport)
         if not url:
             return {}
         ts, cached = self._cache.get(sport, (0.0, {}))
-        if time.time() - ts < CACHE_SECONDS:
+        if time.time() - ts < max_age:
             return cached
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

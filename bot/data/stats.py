@@ -36,6 +36,7 @@ class Result:
     final_home: int | None = None  # итоговый счёт с овертаймом/буллитами (хоккей); None = как основное
     final_away: int | None = None
     decided: str = "REG"  # REG / OT / SO
+    p1: tuple[int, int] | None = None  # счёт 1-го периода (хоккей) / 1-й половины (баскетбол), если известен
 
     @property
     def final(self) -> tuple[int, int]:

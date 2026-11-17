@@ -752,6 +752,11 @@ def stats(month: list[Signal], all_time: list[Signal], bankroll: float, week: li
 
 def bet_type(sport: str, selection: str) -> str:
     """Тип ставки для статистики: победа, фора, тотал больше/меньше и т.д."""
+    if selection.startswith("it"):
+        return "Инд. тотал больше" if selection.endswith("_over") else "Инд. тотал меньше"
+    if selection.startswith("p1_"):
+        part = "1-го периода" if sport == "hockey" else "1-й половины"
+        return f"Тотал {part} " + ("больше" if selection.endswith("_over") else "меньше")
     if selection.startswith("hcp"):
         return "Фора"
     if selection == "over":
@@ -1029,3 +1034,55 @@ def odds_footer(report: ScanReport | None, quota: Quota | None) -> str:
 def now_utc():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc)
+
+
+# ---------- сторож новостей и условия босса ----------
+def escape_btn(text: str) -> str:
+    """Текст кнопки: без HTML, не длиннее 40 символов."""
+    return text if len(text) <= 40 else text[:39] + "…"
+
+
+def cond_label(ctx: MatchContext, c) -> str:
+    return sel_short(ctx.sport, c.selection, c.line if c.line is not None else ctx.line(c.selection))
+
+
+def _cond_text(ctx: MatchContext, c) -> str:
+    what = "не играет" if c.status == "out" else "играет"
+    return (f"если <b>{escape(c.player)}</b> {what} → <b>{escape(cond_label(ctx, c))}</b>, "
+            f"шанс {c.prob:.0%} (ставить от кэфа {(1 + settings.min_stake_ev) / c.prob:.2f})")
+
+
+def condition_saved(ctx: MatchContext, c) -> str:
+    return (f"🧠 Условие босса записано (досье #{c.num}, {escape(ctx.title)}):\n{_cond_text(ctx, c)}.\n"
+            f"Сторож проверяет отчёт о травмах каждые {settings.news_watch_minutes} минут "
+            f"(ночью {settings.news_quiet_hours} молчит) и пришлёт кнопку «Применить», когда условие выполнится.")
+
+
+def conditions_list(ctx: MatchContext, num: int, conds: list) -> str:
+    lines = [f"🧠 <b>Условия босса</b> — досье #{num}, {escape(ctx.title)}:"]
+    for c in conds:
+        lines.append(("✅ сработало: " if c.fired else "⏳ ждём: ") + _cond_text(ctx, c))
+    lines.append("Удалить все: <code>/if " + str(num) + " off</code>")
+    return "\n".join(lines)
+
+
+def news_alert(a) -> str:
+    ctx = a.ctx
+    from ..watch import status_ru
+
+    lines = [f"⚡ <b>Новости перед матчем</b> (досье #{a.num}): {escape(ctx.title)}, "
+             f"начало в {local(ctx.event.kickoff):%H:%M}"]
+    for team, player, old, new in a.changes:
+        lines.append(f"• {escape(player)} ({escape(team)}): {escape(status_ru(old))} → <b>{escape(status_ru(new))}</b>")
+    for s in a.picks:
+        mark = " — <b>ваша ставка</b>" if s.placed else ""
+        lines.append(f"Прогноз босса: {escape(sig_short(s))} (шанс {s.p_final:.0%}, кэф {s.odds_ref:.2f}){mark}")
+    if a.fired:
+        for _, c in a.fired:
+            lines.append(f"✅ <b>Сработало условие босса</b>: {_cond_text(ctx, c)}.")
+        lines.append("Нажмите «Применить» — прогноз заменится (если вы ещё не ставили по этому матчу), "
+                     "и ставьте сразу, пока контора не сдвинула линию. Кэф сверьте с «ставить от».")
+    else:
+        lines.append("Если новость важная — нажмите «🥅 Поздняя проверка» и отправьте текст Claude: "
+                     "линия ещё может не успеть сдвинуться.")
+    return "\n".join(lines)

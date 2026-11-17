@@ -60,10 +60,20 @@ BASKETBALL = Sport(
 SPORTS = {s.key: s for s in (FOOTBALL, HOCKEY, BASKETBALL)}
 
 
+# Доп. рынки (хоккей, баскетбол): индивидуальные тоталы и тотал 1-го периода / 1-й половины.
+# Честная цена — из основной линии (bot/analysis/derived.py), линия всегда указывается: it1_over@2.5.
+DERIVED_GROUPS = (("it1_over", "it1_under"), ("it2_over", "it2_under"), ("p1_over", "p1_under"))
+DERIVED = tuple(x for g in DERIVED_GROUPS for x in g)
+
+
 def group_of(sport: Sport, selection: str) -> tuple[str, ...]:
     for g in sport.groups:
         if selection in g:
             return g
+    if sport.key in ("hockey", "basketball"):
+        for g in DERIVED_GROUPS:
+            if selection in g:
+                return g
     raise ValueError(f"Исход {selection} не относится к виду спорта {sport.key}")
 
 
@@ -111,12 +121,28 @@ def sel_short(sport: Sport, selection: str, line: float | None = None) -> str:
         return f"Ф1({_fmt_line(line)})"
     if selection == "hcp_away":
         return f"Ф2({_fmt_line(line)})"
+    if selection in DERIVED:
+        ln = f"{line:g}" if line is not None else "?"
+        bm = "Б" if selection.endswith("_over") else "М"
+        if selection.startswith("it"):
+            return f"ИТ{selection[2]}{bm}{ln}"
+        return f"{'1П' if hockey else '1Пол'} Т{bm}{ln}"
     return selection
 
 
 def sel_ru(sport: Sport, selection: str, line: float | None = None) -> str:
     """Подробная подпись для сигнала."""
     hockey = sport.key == "hockey"
+    if selection in DERIVED:
+        ln = f"{line:g}" if line is not None else "?"
+        more = selection.endswith("_over")
+        word = "больше" if more else "меньше"
+        unit = "голов" if hockey else "очков"
+        if selection.startswith("it"):
+            who = "хозяев" if selection[2] == "1" else "гостей"
+            return f"{sel_short(sport, selection, line)} — {who} наберут {word} {ln} {unit} (с овертаймом)"
+        part = "в 1-м периоде" if hockey else "в 1-й половине"
+        return f"{sel_short(sport, selection, line)} — {word} {ln} {unit} {part}"
     if selection in ("dc_home", "dc_away"):
         return ("1X — хозяева не проиграют" if selection == "dc_home" else "X2 — гости не проиграют") + \
             (" (основное время)" if hockey else "")
