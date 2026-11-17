@@ -670,3 +670,26 @@ def test_min_stake_ev_rule():
     assert bad.stake == 0 and "только на бумаге" in bad.reason and "ставить от кэфа 1.87" in bad.reason
     low = plan_bet(0.48, 2.40, st, cfg)
     assert low.stake == 0 and "ниже 50%" in low.reason
+
+
+def test_signals_board_ranks_what_to_bet_first():
+    from bot.tg import formatting as fmt
+    from tests.conftest import set_setting
+
+    set_setting("min_stake_prob", 0.50)
+    set_setting("min_stake_ev", 0.03)
+    db = DB(":memory:")
+    base = dict(league_code="NHL", league_name="НХЛ", away="B", min_odds=1.8, p_market=0.5, p_model=None,
+                edge=0.0, stake=10, confidence="low", reasoning="r", sport="hockey")
+    ko = (NOW + timedelta(hours=3)).isoformat()
+    paper = db.add_signal(event_id="m1", selection="ml_home", home="Paper", kickoff=ko, odds_ref=1.65,
+                          p_final=0.57, **base)
+    edge_ = db.add_signal(event_id="m2", selection="under", home="Edge", kickoff=ko, odds_ref=2.12,
+                          p_final=0.52, **base)
+    border = db.add_signal(event_id="m3", selection="under", home="Border", kickoff=ko, odds_ref=2.00,
+                           p_final=0.51, **base)
+    text = fmt.signals_board(db.pending(), now=NOW)
+    assert text.index(f"#{edge_} ") < text.index(f"#{border} ") < text.index(f"#{paper} ")
+    assert "1️⃣" in text and "ставить первой" in text and "✅ ставить" in text
+    assert "🟡 на грани: ставить, только если кэф от 2.02" in text
+    assert "⚪ только на бумаге (нужен кэф от 1.81)" in text

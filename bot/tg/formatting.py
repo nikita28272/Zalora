@@ -405,6 +405,49 @@ def _board_matches(rows: list[Signal], now: datetime) -> list[str]:
     return out
 
 
+_NUMS = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟")
+
+
+def pick_advice(s: Signal) -> tuple[int, str]:
+    """Совет по прогнозу для «Прогнозов и ставок»: 0 — ставить, 1 — на грани, 2 — только на бумаге.
+    Правило то же, что у финансиста: шанс × кэф ≥ 1 + MIN_STAKE_EV и шанс ≥ MIN_STAKE_PROB."""
+    p, odds = s.p_final, s.odds_ref
+    ev = p * odds - 1
+    need = (1 + settings.min_stake_ev) / p if p > 0 else 0.0
+    low_p = p < settings.min_stake_prob - 1e-9
+    if not low_p and ev >= settings.min_stake_ev - 1e-9:
+        return 0, "✅ ставить"
+    if ev >= settings.min_stake_ev - 1e-9:  # цена хорошая, но шанс ниже порога
+        return 1, f"🟡 на грани: шанс ниже {settings.min_stake_prob:.0%} — только малой суммой"
+    if ev >= -0.02:
+        return 1, f"🟡 на грани: ставить, только если кэф от {need:.2f}"
+    return 2, f"⚪ только на бумаге (нужен кэф от {need:.2f})"
+
+
+def _board_ranked(rows: list[Signal], now: datetime) -> list[str]:
+    """Неотмеченные прогнозы до начала — по порядку: сначала «ставить», внутри — самые вероятные."""
+    ranked = sorted(rows, key=lambda s: (pick_advice(s)[0], -s.p_final, -(s.p_final * s.odds_ref), s.kickoff))
+    best_p = max((s.p_final for s in ranked if pick_advice(s)[0] < 2), default=None)
+    out: list[str] = []
+    if ranked and pick_advice(ranked[0])[0] > 0:
+        out.append("<i>Сегодня нет прогнозов с полным перевесом — ниже лучшие из оставшихся.</i>")
+    for i, s in enumerate(ranked):
+        tier, advice = pick_advice(s)
+        num = _NUMS[i] if i < len(_NUMS) else f"{i + 1}."
+        tags = []
+        if i == 0 and tier < 2:
+            tags.append("<b>ставить первой</b>")
+        if best_p is not None and tier < 2 and abs(s.p_final - best_p) < 1e-9:
+            tags.append("самая вероятная")
+        marks = ("🔥" if s.hot else "") + (f"🔗#{s.linked_to}" if s.linked_to else "")
+        out.append(f"\n{num} {_sig_emoji(s)} <b>{local(s.kickoff):%d.%m %H:%M}</b> "
+                   f"{escape(s.home)} — {escape(s.away)}")
+        out.append(f"   ⏳{marks} #{s.id} <b>{escape(_sig_short(s))}</b> · шанс {s.p_final:.0%} · "
+                   f"кэф {s.odds_ref:.2f}" + (" · " + ", ".join(tags) if tags else ""))
+        out.append(f"   {advice} · ❔ решите: сделал или нет")
+    return out
+
+
 def signals_board(pending: list[Signal], now: datetime | None = None) -> str:
     """«📌 Прогнозы и ставки»: сверху ваши ставки, ниже остальные прогнозы босса; по матчам."""
     from datetime import timezone as _tz
@@ -424,12 +467,22 @@ def signals_board(pending: list[Signal], now: datetime | None = None) -> str:
     else:
         lines += ["", "💰 <b>ВАШИ СТАВКИ</b> — пока нет"]
     if other:
+        todo = [s for s in other if s.kickoff > now and s.user_decision == "pending"]
+        rest = [s for s in other if s not in todo]
         lines += ["", "━━━━━━━━━━━━━━━",
                   f"🧠 <b>ОСТАЛЬНЫЕ ПРОГНОЗЫ БОССА</b> — {len(other)}",
                   "━━━━━━━━━━━━━━━"]
-        lines += _board_matches(other, now)
+        if todo:
+            lines += ["🎯 <b>Что ставить — по порядку</b> (сначала с перевесом, внутри — самые вероятные):"]
+            lines += _board_ranked(todo, now)
+        if rest:
+            if todo:
+                lines += ["", "<b>Прочие</b> (матч начался или вы отметили «не ставил»):"]
+            lines += _board_matches(rest, now)
     lines += ["",
               "<i>⏳ — до начала, ▶️ — матч идёт или ждёт итога; 🔥 — совет босса, 🔗 — один сценарий.</i>",
+              "<i>✅ — ставить (шанс × кэф ≥ 1.03), 🟡 — на грани, ⚪ — только на бумаге. "
+              "Перед ставкой сверьте кэф в конторе: если он ниже нужного — не ставьте.</i>",
               "<i># — номер прогноза (для /fire), он не совпадает с номером досье.</i>",
               "<i>🥅 — кнопки ниже: поздняя проверка для Claude по разобранному матчу (составы, вратари).</i>",
               f"<i>Когда матч закончится, в {settings.settle_time.replace(',', ' или ')} бот посчитает "
