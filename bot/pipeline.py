@@ -1242,6 +1242,24 @@ class Engine:
         if raw and not stored and self._before_scan(now):  # выбран днём старой версией — пока показываем его же
             stored = raw if isinstance(raw, list) else raw.get("ids", [])
             self.daily_preliminary = True
+        quota = {"hockey": settings.daily_hockey, "basketball": settings.daily_nba,
+                 "football": settings.daily_football}
+        soon = now + timedelta(hours=settings.daily_window_hours)
+
+        def ranked_for(sport: str, exclude: set[str]) -> list[tuple[MatchContext, str]]:
+            ranked = []
+            for m in pool_all.values():
+                if (m.sport.key != sport or m.event.event_id in done or m.event.event_id in exclude
+                        or not is_prematch(m.event.kickoff)):
+                    continue
+                score, why = self._daily_score(m)
+                opts = safe_options(m)
+                prob = opts[0].p if opts else 0.0
+                level, chance = self.edge_chance(m)
+                ranked.append(((m.event.kickoff > soon, -level, -prob, -score), m, chance + " · " + why))
+            ranked.sort(key=lambda x: x[0])
+            return [(m, why) for _, m, why in ranked]
+
         if stored:
             out = []
             for eid in stored:
@@ -1251,28 +1269,31 @@ class Engine:
                 _, why = self._daily_score(m)
                 level, chance = self.edge_chance(m)
                 out.append((m, ("✅ разобран · " if eid in done else "") + chance + " · " + why))
+            # лига не загрузилась к сканеру (например, кредиты ушли на футбол) — добираем её матчи сейчас,
+            # не трогая уже выбранные
+            have = {sp: sum(1 for eid in stored if (m := pool_all.get(eid)) and m.sport.key == sp) for sp in quota}
+            known = set(raw.get("sports", [])) if isinstance(raw, dict) else set()
+            known |= {m.sport.key for eid in stored if (m := pool_all.get(eid))}
+            added = []
+            for sport in ("hockey", "basketball", "football"):
+                if sport in known or have[sport] >= quota[sport]:
+                    continue
+                added += ranked_for(sport, set(stored))[: quota[sport] - have[sport]]
+            if added:
+                out += added
+                if not self.daily_preliminary:
+                    self.db.set(key, {"ids": list(stored) + [m.event.event_id for m, _ in added], "final": True,
+                                      "sports": sorted(known | {m.sport.key for m, _ in added})})
             return out
-        pool = [m for m in pool_all.values() if m.event.event_id not in done and is_prematch(m.event.kickoff)]
-        soon = now + timedelta(hours=settings.daily_window_hours)
-        quota = {"hockey": settings.daily_hockey, "basketball": settings.daily_nba,
-                 "football": settings.daily_football}
         out: list[tuple[MatchContext, str]] = []
         for sport in ("hockey", "basketball", "football"):
-            cands = [m for m in pool if m.sport.key == sport]
-            ranked = []
-            for m in cands:
-                score, why = self._daily_score(m)
-                opts = safe_options(m)
-                prob = opts[0].p if opts else 0.0
-                level, chance = self.edge_chance(m)
-                ranked.append(((m.event.kickoff > soon, -level, -prob, -score), m, chance + " · " + why))
-            ranked.sort(key=lambda x: x[0])
-            out += [(m, why) for _, m, why in ranked[:quota[sport]]]
+            out += ranked_for(sport, set())[:quota[sport]]
         # до SCAN_TIME (обычно вечером) набор предварительный: травм и вратарей ещё мало —
         # не закрепляем, в SCAN_TIME бот выберет заново по свежим данным
         self.daily_preliminary = self._before_scan(now)
         if out and not self.daily_preliminary:
-            self.db.set(key, {"ids": [m.event.event_id for m, _ in out], "final": True})
+            self.db.set(key, {"ids": [m.event.event_id for m, _ in out], "final": True,
+                              "sports": sorted({m.sport.key for m, _ in out})})
         return out
 
     def scan_at(self, now: datetime) -> datetime:

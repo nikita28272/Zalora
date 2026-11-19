@@ -476,3 +476,40 @@ def test_daily_set_chosen_early_is_reselected_at_scan_time():
     db.set(f"daily_set:{engine.slate_key(scan)}", ["h3", "h2"])
     ids = [m.event.event_id for m, _ in engine.daily_picks(hockey, now=scan)]
     assert ids != ["h3", "h2"] and db.get(f"daily_set:{engine.slate_key(scan)}")["final"]
+
+
+def test_daily_set_tops_up_league_loaded_after_scan():
+    """Набор закрепили, когда НБА не загрузилась (кредиты ушли на другую лигу), — позже НБА добирается,
+    уже выбранные матчи остаются."""
+    import sys
+    sys.path.insert(0, "tests")
+    from test_hockey import _ctx as hockey_ctx
+    from zoneinfo import ZoneInfo
+    from bot.analysis.nba_factors import Factors, TeamSpot
+    from bot.config import settings
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    tz = ZoneInfo(settings.timezone)
+    sh, sm = (int(x) for x in settings.scan_time.split(":"))
+    day = NOW.astimezone(tz) + timedelta(days=1)
+    now = day.replace(hour=sh, minute=sm, second=0, microsecond=0).astimezone(timezone.utc)
+    hockey = []
+    for i in range(3):
+        c = hockey_ctx(now + timedelta(hours=8 + i))
+        c.idx, c.event.event_id = i + 1, f"h{i}"
+        hockey.append(c)
+    first = [m.event.event_id for m, _ in engine.daily_picks(hockey, now=now)]
+    assert len(first) == 2 and all(e.startswith("h") for e in first)
+
+    f = Factors(TeamSpot("A"), TeamSpot("B"), 3.0, 3.0, "хозяева", ["гости на back-to-back"])
+    nbas = []
+    for i in range(3):
+        c = _nba_ctx(f"n{i}", now + timedelta(hours=9 + i), f)
+        c.idx = 10 + i
+        nbas.append(c)
+    later = [m.event.event_id for m, _ in engine.daily_picks(hockey + nbas, now=now + timedelta(hours=1))]
+    assert later[:2] == first and sum(e.startswith("n") for e in later) == settings.daily_nba
+    # набор сохранён: повторный вызов даёт тот же список
+    again = [m.event.event_id for m, _ in engine.daily_picks(list(reversed(hockey + nbas)), now=now + timedelta(hours=2))]
+    assert again == later
