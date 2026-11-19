@@ -209,6 +209,7 @@ def test_manual_flow_dossier_to_signal():
     text = engine.dossier(ctx, num)
     assert f"ДОСЬЕ #{num} ДЛЯ БОССА" in text and f"/verdict {num}" in text
     assert "ДОКЛАД ФИНАНСИСТА" in text and "BOSS.md" in text
+    assert "ДОП. РЫНКИ" not in text and "it1_over" not in text  # доп. рынки — только НХЛ и НБА
     msg = fmt.dossier_message(text)
     assert len(msg) < 4000  # влезает в одно сообщение Telegram
     assert msg.startswith('<pre><code class="language-dossier">') and msg.endswith("</code></pre>")
