@@ -344,3 +344,17 @@ def test_injuries_parse_and_edge_downgrade():
     engine = Engine(db)
     num = engine.save_candidate(ctx)
     assert [i.name for i in engine.load_candidate(num).home_inj][:1] == ["Auston Matthews"]
+
+
+def test_hockey_late_game_and_total_shrink():
+    from bot.pipeline import shrink_hockey_totals
+
+    plain = hockey_probs(2.7, 2.7, 5.5, -1.5, late=False)
+    late = hockey_probs(2.7, 2.7, 5.5, -1.5)
+    # пустые ворота в концовке: «больше» и фора -1.5 чаще, победитель тот же
+    assert late["over"] > plain["over"] + 0.02 and late["hcp_home"] > plain["hcp_home"]
+    assert abs(late["ml_home"] - plain["ml_home"]) < 0.01
+    assert abs(sum(late[k] for k in ("home", "draw", "away")) - 1) < 1e-9
+    probs = {"over": 0.40, "under": 0.60}
+    shrink_hockey_totals(probs, {"over": 0.54, "under": 0.46})
+    assert abs(probs["over"] - 0.47) < 1e-9 and abs(probs["under"] - 0.53) < 1e-9

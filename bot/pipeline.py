@@ -147,6 +147,15 @@ def local(dt: datetime) -> datetime:
     return dt.astimezone(ZoneInfo(settings.timezone))
 
 
+def shrink_hockey_totals(probs: dict[str, float], fair: dict[str, float]) -> None:
+    """Хоккейный тотал модели — ближе к рынку (HOCKEY_TOTAL_TRUST): модель по голам плохо видит
+    концовки с пустыми воротами и серии голов, а рынок тоталов НХЛ точный."""
+    trust = settings.hockey_total_trust
+    if "over" in probs and "over" in fair:
+        probs["over"] = fair["over"] + trust * (probs["over"] - fair["over"])
+        probs["under"] = 1 - probs["over"]
+
+
 def is_prematch(kickoff: datetime) -> bool:
     return kickoff - datetime.now(timezone.utc) >= timedelta(minutes=settings.min_minutes_before_kickoff)
 
@@ -321,7 +330,9 @@ class MatchContext:
         if self.factors_text:
             lines.append(self.factors_text)
         if self.model:
-            what = "рейтинги и усталость" if self.sport.key == "basketball" else "модель по голам"
+            what = {"basketball": "рейтинги и усталость",
+                    "hockey": "модель по голам с концовкой «пустые ворота»; тотал — середина модели и рынка"
+                    }.get(self.sport.key, "модель по голам")
             probs = [f"  {self.short(sel)}: {self.model.probs[sel]:.1%}"
                      for sel in self.sport.outcomes if sel in self.model.probs]
             if probs:
@@ -605,6 +616,8 @@ class Engine:
                         ctx.model.probs = sport_probs(event.league.sport, ctx.model.lambda_home,
                                                       ctx.model.lambda_away, mv.lines, ctx.model.draw_boost,
                                                       ctx.model.sds)
+                        if event.league.sport == "hockey":
+                            shrink_hockey_totals(ctx.model.probs, mv.fair)
                     if isinstance(model, NbaModel):
                         margin = (ctx.model.lambda_home - ctx.model.lambda_away) if ctx.model else None
                         ctx.factors = nba_factors(model.results, ctx.fd_home, ctx.fd_away, event.kickoff, margin)

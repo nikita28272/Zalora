@@ -202,49 +202,67 @@ def outcome_probs(lam_h: float, lam_a: float, total_line: float = 2.5, draw_boos
     return {"home": home, "draw": draw, "away": away, "over": over, "under": under}
 
 
+# Концовка матча (по статистике НХЛ): при счёте ±1–2 проигрывающие снимают вратаря.
+# Обычный Пуассон этого не видит и занижает «больше» и форы ±1.5 (адвокат дьявола об этом и говорил):
+# при ±1 — гол в пустые ворота ведущих или ничья 6×5 (тогда ОТ/буллиты), при ±2 — пустые ворота или −1.
+EN_LEAD1, EN_TIE1 = 0.22, 0.10
+EN_LEAD2, EN_CUT2 = 0.15, 0.08
+
+
+def _late(i: int, j: int):
+    """Счёт основного времени после концовки с пустыми воротами: (голы хозяев, гостей, вероятность)."""
+    d = i - j
+    if abs(d) == 1:
+        lead, trail = ((i + 1, j), (i, j + 1)) if d > 0 else ((i, j + 1), (i + 1, j))
+        return ((*lead, EN_LEAD1), (*trail, EN_TIE1), (i, j, 1 - EN_LEAD1 - EN_TIE1))
+    if abs(d) == 2:
+        lead, cut = ((i + 1, j), (i, j + 1)) if d > 0 else ((i, j + 1), (i + 1, j))
+        return ((*lead, EN_LEAD2), (*cut, EN_CUT2), (i, j, 1 - EN_LEAD2 - EN_CUT2))
+    return ((i, j, 1.0),)
+
+
 def hockey_probs(lam_h: float, lam_a: float, total_line: float = 5.5, hcp_home: float = -1.5,
-                 draw_boost: float = 1.0) -> dict[str, float]:
+                 draw_boost: float = 1.0, late: bool = True) -> dict[str, float]:
     """Хоккей. lam_* — ожидаемые голы за основное время (60 минут).
 
     Если основное время закончилось вничью, исход решают овертайм или буллиты: победитель
     получает +1 гол к итоговому счёту. Шанс хозяев выиграть ОТ/буллиты берём пропорционально
     силе атак. Тотал и фора считаются по итоговому счёту, как у букмекеров.
+    late — учитывать концовку с пустыми воротами (_late).
     """
     m = _matrix(lam_h, lam_a, draw_boost)
     s_home = lam_h / (lam_h + lam_a) if lam_h + lam_a > 0 else 0.5
     reg_home = reg_draw = reg_away = 0.0
     over = under = 0.0
     h_win = h_lose = 0.0  # фора хозяев
-    for i, row in enumerate(m):
-        for j, p in enumerate(row):
-            if i == j:
-                reg_draw += p
-                # ОТ/буллиты: итог (i+1):i или i:(i+1)
-                for diff, q in ((1, s_home), (-1, 1 - s_home)):
-                    tot = i + j + 1
-                    if tot > total_line:
-                        over += p * q
-                    elif tot < total_line:
-                        under += p * q
-                    margin = diff + hcp_home
-                    if margin > 0:
-                        h_win += p * q
-                    elif margin < 0:
-                        h_lose += p * q
-                continue
-            if i > j:
-                reg_home += p
-            else:
-                reg_away += p
-            if i + j > total_line:
-                over += p
-            elif i + j < total_line:
-                under += p
-            margin = (i - j) + hcp_home
-            if margin > 0:
-                h_win += p
-            elif margin < 0:
-                h_lose += p
+
+    def final(i: int, j: int, p: float) -> None:
+        nonlocal over, under, h_win, h_lose
+        tot = i + j
+        if tot > total_line:
+            over += p
+        elif tot < total_line:
+            under += p
+        margin = (i - j) + hcp_home
+        if margin > 0:
+            h_win += p
+        elif margin < 0:
+            h_lose += p
+
+    for i0, row in enumerate(m):
+        for j0, p0 in enumerate(row):
+            for i, j, q in (_late(i0, j0) if late else ((i0, j0, 1.0),)):
+                p = p0 * q
+                if i == j:
+                    reg_draw += p
+                    final(i + 1, j, p * s_home)  # ОТ/буллиты: +1 гол победителю
+                    final(i, j + 1, p * (1 - s_home))
+                    continue
+                if i > j:
+                    reg_home += p
+                else:
+                    reg_away += p
+                final(i, j, p)
     over, under = _two_way(over, under)
     hcp_h, hcp_a = _two_way(h_win, h_lose)
     return {

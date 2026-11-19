@@ -128,6 +128,9 @@ class Settings:
     min_edge: float = field(default_factory=lambda: _float("MIN_EDGE", 0.03))
     # насколько модель может сдвинуть оценку рынка: 0.35 — на треть разницы между ними
     model_weight: float = field(default_factory=lambda: _float("MODEL_WEIGHT", 0.35))
+    # Хоккейные тоталы: модель по голам систематически завышала «меньше» (3 из 11 на бумаге).
+    # Её оценку тотала двигаем к рынку: 0.5 — середина между моделью и честной линией, 0 — только рынок
+    hockey_total_trust: float = field(default_factory=lambda: _float("HOCKEY_TOTAL_TRUST", 0.5))
     # расхождение модели с рынком больше этого — почти всегда ошибка модели: такой исход не кандидат
     max_model_gap: float = field(default_factory=lambda: _float("MAX_MODEL_GAP", 0.12))
     # Отбор матчей для разбора: сколько показывать наверху и с какой оценки перевеса (−1% = почти в ноль:
