@@ -246,7 +246,7 @@ class OddsClient:
 
     async def upcoming(self, hours: int | None = None, allowance: float | None = None,
                        gate=None, store=None, max_age_minutes: int | None = None) -> tuple[list[Event], ScanReport]:
-        """Линии по лигам в порядке приоритета (порядок ENABLED_LEAGUES).
+        """Линии по лигам в порядке приоритета: НХЛ, НБА, затем футбол (порядок ENABLED_LEAGUES).
 
         1. Бесплатно проверяем, есть ли у лиги матчи в окне; пустые лиги пропускаем.
         2. gate(лига, матчи) — бесплатный фильтр: False — разбирать нечего, линии не нужны
@@ -261,8 +261,11 @@ class OddsClient:
         events: list[Event] = []
         now = datetime.now(timezone.utc)
         tz = ZoneInfo(settings.timezone)
+        # НХЛ и НБА — основные лиги владельца: при нехватке кредитов загружаются первыми,
+        # футбол — после них (внутри групп — порядок ENABLED_LEAGUES)
+        order = sorted(LEAGUES, key=lambda lg: {"hockey": 0, "basketball": 1}.get(lg.sport, 2))
         async with httpx.AsyncClient(timeout=30) as client:
-            for league in LEAGUES:
+            for league in order:
                 saved = store.get(f"odds_raw:{league.odds_key}") if store is not None else None
                 # первая загрузка лиги за день разрешена всегда (кроме неприкосновенного запаса);
                 # дневной бюджет ограничивает только повторные обновления той же лиги

@@ -67,7 +67,7 @@ def test_free_precheck_and_market_memory(api):
     client = odds_mod.OddsClient("key")
     events, report = asyncio.run(client.upcoming(hours=48))
     assert report.empty == [CL.name_ru]  # без матчей — пропущена бесплатно
-    assert [s for s, _ in api.paid_calls] == [PL.odds_key, NHL.odds_key]
+    assert [s for s, _ in api.paid_calls] == [NHL.odds_key, PL.odds_key]  # НХЛ и НБА — первыми
     assert report.spent == 2 + 3 and api.rejected == 1  # 1X2 основного времени не принят, взяли без него
     assert len(events) == 2
 
@@ -78,7 +78,7 @@ def test_free_precheck_and_market_memory(api):
 def test_budget_skips_low_priority_leagues(api):
     client = odds_mod.OddsClient("key")
     _, report = asyncio.run(client.upcoming(hours=48, allowance=3))
-    assert report.paid == [PL.name_ru] and report.budget_skipped == [NHL.name_ru]
+    assert report.paid == [NHL.name_ru] and report.budget_skipped == [PL.name_ru]
     assert "Отложено" in fmt.scan_report_line(report)
 
 
@@ -224,18 +224,18 @@ def test_first_daily_load_is_free_of_budget_repeats_are_limited(api):
     engine.scan_allowance = lambda: 0  # дневной бюджет исчерпан
     asyncio.run(engine.load_matches())
     # первая загрузка за день: обе лиги, несмотря на бюджет
-    assert engine.last_report.paid == [PL.name_ru, NHL.name_ru] and not engine.last_report.budget_skipped
+    assert engine.last_report.paid == [NHL.name_ru, PL.name_ru] and not engine.last_report.budget_skipped
 
     # повторное обновление в тот же день (линии устарели) — бюджет действует: вторая лига отложена
     used = api.used
     asyncio.run(engine.load_matches(max_age_minutes=0))
-    assert engine.last_report.paid == [PL.name_ru] and engine.last_report.budget_skipped == [NHL.name_ru]
+    assert engine.last_report.paid == [NHL.name_ru] and engine.last_report.budget_skipped == [PL.name_ru]
     assert force_row(engine.last_report)[0].callback_data == "odds:force"
-    assert api.used == used + 2
+    assert api.used == used + 3
 
     # «⏩ Загрузить отложенные»: бюджет не применяется
     asyncio.run(engine.load_matches(max_age_minutes=0, force=True))
-    assert NHL.name_ru in engine.last_report.paid and not engine.last_report.budget_skipped
+    assert PL.name_ru in engine.last_report.paid and not engine.last_report.budget_skipped
 
 
 def test_gated_league_still_listed_from_free_schedule():
