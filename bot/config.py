@@ -208,8 +208,8 @@ class Settings:
     paper_stake_pct: float = field(default_factory=lambda: _float("PAPER_STAKE_PCT", 0.005))
     # НБА «по анализу»: при перевесе ниже этого (по оценке босса и вашему кэфу) финансист ставить не даёт
     # правило ставки: шанс босса × кэф ≥ 1 + MIN_STAKE_EV (ожидаемый плюс от 3%) и шанс не ниже MIN_STAKE_PROB;
-    # иначе прогноз только на бумаге. 54% по 1.96 проходит (+6%), 55% по 1.75 — нет (−4%)
-    min_stake_prob: float = field(default_factory=lambda: _float("MIN_STAKE_PROB", 0.50))
+    # иначе прогноз только на бумаге. 56% по 1.90 проходит (+6%), 56% по 1.75 — нет (−2%), 54% — только бумага
+    min_stake_prob: float = field(default_factory=lambda: _float("MIN_STAKE_PROB", 0.55))
     min_stake_ev: float = field(default_factory=lambda: _float("MIN_STAKE_EV", 0.03))
     analysis_min_edge: float = field(default_factory=lambda: _float("ANALYSIS_MIN_EDGE", -0.03))
     max_bets_per_day: int = field(default_factory=lambda: _int("MAX_BETS_PER_DAY", 0))  # 0 — без лимита
