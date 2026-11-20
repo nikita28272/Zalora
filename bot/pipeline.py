@@ -1482,8 +1482,11 @@ class Engine:
             out[side] = got[key] if key else None
         return out
 
-    async def news_watch(self, now: datetime | None = None) -> list[NewsAlert]:
-        """Изменения в отчётах о травмах по матчам с прогнозом босса + сработавшие условия босса."""
+    async def news_watch(self, now: datetime | None = None, quiet: bool = False) -> list[NewsAlert]:
+        """Изменения в отчётах о травмах по матчам с прогнозом босса + сработавшие условия босса.
+
+        quiet — тихие ночные часы: присылаем только важное — сработавшие условия босса и вратарей
+        по матчам, где владелец уже поставил. Остальное не запоминаем: утром придёт как обычно."""
         now = now or datetime.now(timezone.utc)
         horizon = now + timedelta(hours=settings.news_watch_hours)
         events: dict[str, list[Signal]] = {}
@@ -1549,6 +1552,13 @@ class Engine:
                     fired.append((i, c))
             if fired:
                 self.db.set(f"cond:{eid}", [c.as_dict() for c in conds])
+            if quiet:
+                if not any(s.placed for s in picks):
+                    goalie_news = []
+                quiet_seen = dict(seen)  # травмы — как было, чтобы утром прислать их изменения
+                if goalie_news:
+                    quiet_seen["goalies"] = cur.get("goalies", {})
+                cur, changes = quiet_seen, []
             self.db.set(f"news_seen:{eid}", cur)
             if changes or fired or goalie_news:
                 alerts.append(NewsAlert(num, ctx, changes, fired, picks, goalie_news))

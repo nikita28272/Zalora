@@ -112,7 +112,7 @@ _CONF_ALIASES = {
 }
 IF_USAGE = (
     "Условие босса — ставка на случай новости о составе (сторож проверяет отчёт о травмах каждые "
-    f"{settings.news_watch_minutes} минут, ночью {settings.news_quiet_hours} молчит):\n"
+    f"{settings.news_watch_minutes} минут, ночью {settings.news_quiet_hours} присылает только сработавшие условия):\n"
     "<code>/if НОМЕР_ДОСЬЕ ИГРОК out|in ИСХОД ВЕРОЯТНОСТЬ [УВЕРЕННОСТЬ]</code>\n"
     "Например: <code>/if 38 Scottie Barnes out under@215.5 0.57 low</code> — если Барнс не играет, "
     "прогноз ТМ215.5 с шансом 57%.\n"
@@ -1394,11 +1394,11 @@ def news_keyboard(alert) -> InlineKeyboardMarkup:
 
 async def run_news_watch(bot: Bot, engine: Engine, chat_id: int) -> None:
     """Каждые NEWS_WATCH_MINUTES: новости о травмах по матчам с прогнозом босса и условия босса.
-    Ночью (NEWS_QUIET_HOURS) — молчим и не запоминаем: утром придёт всё, что изменилось."""
-    if _quiet_now(fmt.local(fmt.now_utc()), settings.news_quiet_hours):
-        return
+    Ночью (NEWS_QUIET_HOURS) — только важное: сработавшие условия босса и вратари по матчам с вашей
+    ставкой; обычные новости о травмах ждут утра."""
+    quiet = _quiet_now(fmt.local(fmt.now_utc()), settings.news_quiet_hours)
     try:
-        alerts = await engine.news_watch()
+        alerts = await engine.news_watch(quiet=quiet)
     except Exception:  # noqa: BLE001
         log.exception("news watch failed")
         return

@@ -1057,7 +1057,7 @@ def condition_saved(ctx: MatchContext, c) -> str:
     return (f"🧠 Условие босса записано (досье #{c.num}, {escape(ctx.title)}):\n{_cond_text(ctx, c)}.\n"
             f"Сторож проверяет отчёт о травмах{' и стартовых вратарей' if ctx.sport.key == 'hockey' else ''} "
             f"каждые {settings.news_watch_minutes} минут "
-            f"(ночью {settings.news_quiet_hours} молчит) и пришлёт кнопку «Применить», когда условие выполнится.")
+            f"(ночью {settings.news_quiet_hours} — только такие условия и вратари по вашим ставкам) и пришлёт кнопку «Применить», когда условие выполнится.")
 
 
 def conditions_list(ctx: MatchContext, num: int, conds: list) -> str:

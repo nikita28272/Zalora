@@ -163,3 +163,37 @@ def test_goalie_condition_and_watch(monkeypatch):
     bench = Condition(num, "Woll", "bench", "over", None, 0.55)
     assert condition_met(bench, [], list(page.values()))
     assert not condition_met(Condition(num, "Woll", "start", "over", None, 0.55), [], list(page.values()))
+
+
+def test_quiet_hours_send_only_important(monkeypatch):
+    from bot.data.goalies import GoalieStart
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _ctx(NOW + timedelta(hours=3))
+    num = engine.save_candidate(ctx)
+    top = engine.manual_top(num, [("over", 0.5)], "low")
+    report = {"Toronto Maple Leafs": [Injury("Auston Matthews", "Out", "Knee")], "Boston Bruins": []}
+    page = {"Boston Bruins": GoalieStart("Boston Bruins", "Jeremy Swayman", "confirmed")}
+
+    async def inj(sport, max_age=None):
+        return report
+
+    async def goalies(day, max_age=None):
+        return page
+
+    monkeypatch.setattr(engine.injuries, "fetch", inj)
+    monkeypatch.setattr(engine.goalies, "fetch", goalies)
+    # ночью, ставки нет: травма и вратарь ждут утра
+    assert asyncio.run(engine.news_watch(now=NOW, quiet=True)) == []
+    # условие босса срабатывает и ночью
+    engine.add_condition(Condition(num, "Matthews", "out", "under", None, 0.58))
+    a = asyncio.run(engine.news_watch(now=NOW, quiet=True))
+    assert len(a) == 1 and a[0].fired and a[0].changes == [] and a[0].goalies == []
+    # ваша ставка — вратарь приходит ночью
+    db.decide(top.picks[0].signal_id, placed=True, stake=100, odds=1.9)
+    a = asyncio.run(engine.news_watch(now=NOW, quiet=True))
+    assert len(a) == 1 and a[0].goalies and a[0].goalies[0][1].name == "Jeremy Swayman"
+    # утром — травма, которую ночью не присылали
+    a = asyncio.run(engine.news_watch(now=NOW))
+    assert len(a) == 1 and a[0].changes and not a[0].goalies

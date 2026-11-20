@@ -192,7 +192,8 @@ class Settings:
     # Сторож новостей: раз в N минут сверяет отчёт о травмах ESPN по матчам с прогнозом босса (кредиты не тратит)
     news_watch_minutes: int = field(default_factory=lambda: _int("NEWS_WATCH_MINUTES", 10))
     news_watch_hours: int = field(default_factory=lambda: _int("NEWS_WATCH_HOURS", 24))  # матчи на сколько часов вперёд
-    # Ночью сторож молчит («0-8» — с 00:00 до 08:00 по TIMEZONE), утром присылает всё, что изменилось за ночь
+    # Ночью («0-8» — с 00:00 до 08:00 по TIMEZONE) сторож присылает только сработавшие условия босса и вратарей
+    # по матчам с вашей ставкой; остальные новости — утром
     news_quiet_hours: str = field(default_factory=lambda: _env("NEWS_QUIET_HOURS", "0-8"))
 
     # --- банкролл и лимиты (финансист) ---
