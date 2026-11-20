@@ -37,9 +37,10 @@ from .analysis.nba_factors import Factors, nba_factors
 from .analysis.poisson import ModelOutput, PoissonModel, sport_probs
 from .config import LEAGUES_BY_ODDS_KEY, RISK_NAMES_RU, League, settings
 from .data import news
+from .data.goalies import GoalieClient, GoalieStart
 from .data.injuries import Injury, InjuryClient
 from .data.nhl import espn_first_periods
-from .watch import Condition, condition_met, diff_injuries
+from .watch import GOALIE_STATUSES, Condition, condition_met, diff_injuries
 from .data.nba import NbaClient, standings_from_results
 from .data.nba import season_start as nba_season_start
 from .data.nhl import NhlClient
@@ -400,6 +401,7 @@ class NewsAlert:
     changes: list[tuple[str, str, str | None, str | None]]  # команда, игрок, было, стало
     fired: list[tuple[int, "Condition"]]
     picks: list[Signal]
+    goalies: list[tuple[str, "GoalieStart", str | None]] = field(default_factory=list)  # команда, вратарь, прежний
 
 
 @dataclass
@@ -448,6 +450,7 @@ class Engine:
         self.nhl = NhlClient()
         self.nba = NbaClient()
         self.injuries = InjuryClient()
+        self.goalies = GoalieClient()
         self.matches: list[MatchContext] = []
         self._events: tuple[float, list[Event]] = (0.0, [])
         self.last_report: ScanReport | None = None
@@ -1423,6 +1426,8 @@ class Engine:
             raise ValueError("Матч уже начался: условие не записываю.")
         if ctx.sport.key not in ("hockey", "basketball"):
             raise ValueError("Сторож новостей работает только по НХЛ и НБА (отчёт о травмах ESPN).")
+        if c.status in GOALIE_STATUSES and ctx.sport.key != "hockey":
+            raise ValueError("Условия start/bench — про вратарей, только для НХЛ.")
         group_of(ctx.sport, c.selection)  # исход подходит виду спорта
         if c.selection in DERIVED and c.line is None:
             raise ValueError(f"Для доп. рынка нужна линия: {c.selection}@2.5.")
@@ -1459,10 +1464,23 @@ class Engine:
         ctx = self.load_candidate(c.num)
         if ctx is None:
             return False
+        if c.status in GOALIE_STATUSES:
+            got = await self.match_goalies(ctx, max_age=60)
+            return condition_met(c, [], [g for g in got.values() if g])
         inj = await self.injuries.fetch(ctx.sport.key, max_age=60)
         teams = [inj.get(k, []) for t in (ctx.event.home_team, ctx.event.away_team)
                  if (k := best_match(t, inj.keys()))]
         return bool(teams) and condition_met(c, teams)
+
+    async def match_goalies(self, ctx: MatchContext, max_age: float = 600) -> dict[str, GoalieStart | None]:
+        """Стартовые вратари матча НХЛ: {"home": …, "away": …}; None — нет данных по команде."""
+        day = ctx.event.kickoff.astimezone(ZoneInfo("America/New_York")).date()
+        got = await self.goalies.fetch(day, max_age=max_age)
+        out: dict[str, GoalieStart | None] = {}
+        for side, team in (("home", ctx.event.home_team), ("away", ctx.event.away_team)):
+            key = best_match(team, got.keys()) if got else None
+            out[side] = got[key] if key else None
+        return out
 
     async def news_watch(self, now: datetime | None = None) -> list[NewsAlert]:
         """Изменения в отчётах о травмах по матчам с прогнозом босса + сработавшие условия босса."""
@@ -1483,7 +1501,10 @@ class Engine:
             if sport not in reports:
                 reports[sport] = await self.injuries.fetch(sport, max_age=max(60, settings.news_watch_minutes * 60 - 30))
             inj = reports[sport]
-            if not inj:  # отчёт недоступен — ничего не сравниваем, чтобы не прислать ложных новостей
+            # отчёт о травмах недоступен — травмы не сравниваем, чтобы не прислать ложных новостей
+            # (вратарей при этом проверяем: у них свой источник)
+            inj_ok = bool(inj)
+            if not inj_ok and sport != "hockey":
                 continue
             seen = self.db.get(f"news_seen:{eid}") or {
                 "home": {i.name: i.status for i in ctx.home_inj},
@@ -1501,17 +1522,36 @@ class Engine:
                 cur[side] = {i.name: i.status for i in inj[key]}
                 teams.append(inj[key])
                 changes += [(team, n, old, new) for n, old, new in diff_injuries(seen.get(side, {}), cur[side])]
+            goalie_news: list[tuple[str, GoalieStart, str | None]] = []
+            goalies: list[GoalieStart] = []
+            if sport == "hockey":
+                got = await self.match_goalies(ctx, max_age=max(60, settings.news_watch_minutes * 60 - 30))
+                prev = seen.get("goalies", {})
+                cur["goalies"] = dict(prev)
+                for side, team in (("home", ctx.event.home_team), ("away", ctx.event.away_team)):
+                    g = got.get(side)
+                    if g is None:
+                        continue
+                    goalies.append(g)
+                    old = prev.get(side)  # [имя, статус] при прошлой проверке
+                    cur["goalies"][side] = [g.name, g.strength]
+                    renamed = old is not None and old[0] != g.name
+                    newly = g.confirmed and (old is None or old[1] != "confirmed" or renamed)
+                    if newly or renamed:
+                        goalie_news.append((team, g, old[0] if renamed else None))
             conds = [Condition.from_dict(d) for d in (self.db.get(f"cond:{eid}") or [])]
             fired = []
             for i, c in enumerate(conds):
-                if not c.fired and condition_met(c, teams):
+                if c.fired or (not inj_ok and c.status not in GOALIE_STATUSES):
+                    continue
+                if condition_met(c, teams, goalies):
                     c.fired = True
                     fired.append((i, c))
             if fired:
                 self.db.set(f"cond:{eid}", [c.as_dict() for c in conds])
             self.db.set(f"news_seen:{eid}", cur)
-            if changes or fired:
-                alerts.append(NewsAlert(num, ctx, changes, fired, picks))
+            if changes or fired or goalie_news:
+                alerts.append(NewsAlert(num, ctx, changes, fired, picks, goalie_news))
         return alerts
 
     def num_for_event(self, event_id: str) -> int | None:

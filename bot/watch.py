@@ -10,6 +10,8 @@
   = «если Скотти Барнс не играет — прогноз ТМ215.5 с шансом 57%». Когда сторож видит, что условие
 выполнено, он присылает его с кнопкой «Применить» (это тот же /verdict). Статусы: out — не играет,
 in — играет (снят из отчёта о травмах или «скорее сыграет»).
+Вратари НХЛ (DailyFaceoff): start — подтверждён в воротах, bench — подтверждены оба вратаря матча, и это
+не он. Например: /if 47 Ersson start it2_over@2.5 0.56 low.
 """
 
 from __future__ import annotations
@@ -21,14 +23,17 @@ from .data.injuries import Injury
 STATUS_WORDS = {
     "out": "out", "не_играет": "out", "неиграет": "out", "нет": "out", "выбыл": "out",
     "in": "in", "играет": "in", "сыграет": "in",
+    "start": "start", "starter": "start", "в_воротах": "start", "вворотах": "start", "вратарь": "start",
+    "bench": "bench", "запасной": "bench", "не_в_воротах": "bench",
 }
+GOALIE_STATUSES = ("start", "bench")
 
 
 @dataclass
 class Condition:
     num: int
     player: str
-    status: str  # out / in
+    status: str  # out / in / start / bench (вратарь)
     selection: str
     line: float | None
     prob: float
@@ -77,7 +82,8 @@ def parse_condition(args: str, sel_aliases: dict, conf_aliases: dict, parse_prob
             return f"не понял линию «{raw_line}»"
     status = STATUS_WORDS.get(rest[-3].lower())
     if status is None:
-        return f"статус «{rest[-3]}»: нужно out (не играет) или in (играет)"
+        return (f"статус «{rest[-3]}»: нужно out (не играет), in (играет), "
+                "start (вратарь в воротах) или bench (вратарь не в воротах)")
     player = " ".join(rest[:-3]).strip()
     if len(player) < 3:
         return "не указан игрок"
@@ -100,7 +106,14 @@ def player_status(name: str, teams: list[list[Injury]]) -> Injury | None:
     return None
 
 
-def condition_met(c: Condition, teams: list[list[Injury]]) -> bool:
+def condition_met(c: Condition, teams: list[list[Injury]], goalies: list | None = None) -> bool:
+    """goalies — стартовые вратари обеих команд (GoalieStart) или None, если данных нет."""
+    if c.status in GOALIE_STATUSES:
+        if not goalies:
+            return False
+        if c.status == "start":
+            return any(g.confirmed and _same_player(c.player, g.name) for g in goalies)
+        return len(goalies) == 2 and all(g.confirmed and not _same_player(c.player, g.name) for g in goalies)
     found = player_status(c.player, teams)
     if c.status == "out":
         return bool(found and found.out)

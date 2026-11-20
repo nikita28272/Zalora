@@ -18,7 +18,11 @@ def _relaxed_stake_rules(monkeypatch):
     async def no_injuries(self, sport, max_age=None):
         return {}
 
+    async def no_goalies(self, day, max_age=None):
+        return {}
+
     monkeypatch.setattr("bot.data.injuries.InjuryClient.fetch", no_injuries)
+    monkeypatch.setattr("bot.data.goalies.GoalieClient.fetch", no_goalies)
     yield
     set_setting("min_stake_prob", old[0])
     set_setting("min_stake_ev", old[1])

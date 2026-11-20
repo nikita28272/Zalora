@@ -37,9 +37,8 @@ def _pmf(lam: float, k: int) -> float:
 
 
 def _pois_over(lam: float, line: float) -> float:
-    """P(X > line) для Пуассона; line — половинчатая."""
-    k = math.floor(line)
-    return 1 - sum(_pmf(lam, i) for i in range(k + 1))
+    """Шанс «больше» для Пуассона; при целой линии — без возврата (как честная цена у конторы)."""
+    return _over({k: _pmf(lam, k) for k in range(MAX_GOALS * 2 + 1)}, line)
 
 
 def hockey_final(lh: float, la: float) -> dict:
@@ -76,7 +75,11 @@ def hockey_final(lh: float, la: float) -> dict:
 
 
 def _over(dist: dict[int, float], line: float) -> float:
-    return sum(p for k, p in dist.items() if k > line)
+    """Шанс «больше». Целая линия (6, 3): ровно в линию — возврат, поэтому делим на исходы без возврата —
+    так же считается честная цена «ТБ/ТМ» из кэфов конторы."""
+    over = sum(p for k, p in dist.items() if k > line)
+    under = sum(p for k, p in dist.items() if k < line)
+    return over / (over + under) if over + under > 0 else 0.5
 
 
 def fit_hockey(p_ml_home: float, p_over: float, total_line: float) -> tuple[float, float] | None:

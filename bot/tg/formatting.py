@@ -1047,14 +1047,16 @@ def cond_label(ctx: MatchContext, c) -> str:
 
 
 def _cond_text(ctx: MatchContext, c) -> str:
-    what = "не играет" if c.status == "out" else "играет"
+    what = {"out": "не играет", "in": "играет", "start": "в воротах (подтверждён)",
+            "bench": "не в воротах (подтверждён другой вратарь)"}.get(c.status, c.status)
     return (f"если <b>{escape(c.player)}</b> {what} → <b>{escape(cond_label(ctx, c))}</b>, "
             f"шанс {c.prob:.0%} (ставить от кэфа {(1 + settings.min_stake_ev) / c.prob:.2f})")
 
 
 def condition_saved(ctx: MatchContext, c) -> str:
     return (f"🧠 Условие босса записано (досье #{c.num}, {escape(ctx.title)}):\n{_cond_text(ctx, c)}.\n"
-            f"Сторож проверяет отчёт о травмах каждые {settings.news_watch_minutes} минут "
+            f"Сторож проверяет отчёт о травмах{' и стартовых вратарей' if ctx.sport.key == 'hockey' else ''} "
+            f"каждые {settings.news_watch_minutes} минут "
             f"(ночью {settings.news_quiet_hours} молчит) и пришлёт кнопку «Применить», когда условие выполнится.")
 
 
@@ -1074,6 +1076,9 @@ def news_alert(a) -> str:
              f"начало в {local(ctx.event.kickoff):%H:%M}"]
     for team, player, old, new in a.changes:
         lines.append(f"• {escape(player)} ({escape(team)}): {escape(status_ru(old))} → <b>{escape(status_ru(new))}</b>")
+    for team, g, prev in getattr(a, "goalies", []):
+        was = f" (вместо {escape(prev)})" if prev else ""
+        lines.append(f"🥅 Вратарь {escape(team)}: <b>{escape(g.name)}</b>{was} — {escape(g.strength_ru)}")
     for s in a.picks:
         mark = " — <b>ваша ставка</b>" if s.placed else ""
         lines.append(f"Прогноз босса: {escape(sig_short(s))} (шанс {s.p_final:.0%}, кэф {s.odds_ref:.2f}){mark}")

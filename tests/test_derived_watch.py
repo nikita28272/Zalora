@@ -104,3 +104,62 @@ def test_news_watch_alerts_and_condition(monkeypatch):
     assert asyncio.run(engine.news_watch(now=NOW)) == []  # повторно не шлём
     top = engine.apply_condition(num, a.fired[0][0])
     assert [p.selection for p in top.picks] == ["under"]
+
+
+def test_integer_total_line_ignores_push():
+    # целая линия 6 с честным 50/50 — та же картина, что и между 5.5 и 6.5
+    lh6, la6 = fit_hockey(0.55, 0.5, 6)
+    lh5, la5 = fit_hockey(0.55, 0.55, 5.5)
+    assert abs(_over(hockey_final(lh6, la6)["total"], 6) - 0.5) < 1e-3
+    assert abs((lh6 + la6) - (lh5 + la5)) < 0.3
+    assert abs(_over({5: 0.2, 6: 0.5, 7: 0.3}, 6) - 0.6) < 1e-9
+
+
+def test_parse_goalies_page():
+    from bot.data.goalies import parse_goalies
+
+    html = ('<html><script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{"data":[{'
+            '"homeTeamName":"Ottawa Senators","awayTeamName":"Philadelphia Flyers",'
+            '"homeGoalieName":"Samuel Ersson","awayGoalieName":"Dan Vladar",'
+            '"homeNewsStrengthName":"Confirmed","awayNewsStrengthName":"Likely"}]}}}</script></html>')
+    got = parse_goalies(html)
+    assert got["Ottawa Senators"].name == "Samuel Ersson" and got["Ottawa Senators"].confirmed
+    assert got["Philadelphia Flyers"].strength == "likely" and not got["Philadelphia Flyers"].confirmed
+    assert parse_goalies("<html>нет данных</html>") == {}
+
+
+def test_goalie_condition_and_watch(monkeypatch):
+    from bot.data.goalies import GoalieStart
+
+    db = DB(":memory:")
+    engine = Engine(db)
+    ctx = _ctx(NOW + timedelta(hours=6))
+    num = engine.save_candidate(ctx)
+    engine.manual_top(num, [("over", 0.5)], "low")
+    cond = parse_condition(f"{num} Swayman start it2_over@2.5 0.56 low", _SEL_ALIASES, _CONF_ALIASES, _parse_prob)
+    assert isinstance(cond, Condition) and cond.status == "start"
+    engine.add_condition(cond)
+
+    page = {"Toronto Maple Leafs": GoalieStart("Toronto Maple Leafs", "Joseph Woll", "likely"),
+            "Boston Bruins": GoalieStart("Boston Bruins", "Jeremy Swayman", "likely")}
+
+    async def goalies(day, max_age=None):
+        return page
+
+    async def inj(sport, max_age=None):
+        return {"Toronto Maple Leafs": [], "Boston Bruins": []}
+
+    monkeypatch.setattr(engine.goalies, "fetch", goalies)
+    monkeypatch.setattr(engine.injuries, "fetch", inj)
+    assert asyncio.run(engine.news_watch(now=NOW)) == []  # «скорее всего» — молчим, условие не срабатывает
+    page["Boston Bruins"] = GoalieStart("Boston Bruins", "Jeremy Swayman", "confirmed")
+    alerts = asyncio.run(engine.news_watch(now=NOW))
+    assert len(alerts) == 1 and len(alerts[0].fired) == 1
+    text = fmt.news_alert(alerts[0])
+    assert "Вратарь Boston Bruins" in text and "подтверждён" in text and "Сработало условие" in text
+    page["Toronto Maple Leafs"] = GoalieStart("Toronto Maple Leafs", "Anthony Stolarz", "confirmed")
+    a = asyncio.run(engine.news_watch(now=NOW))
+    assert len(a) == 1 and a[0].goalies[0][2] == "Joseph Woll"  # сменился вратарь
+    bench = Condition(num, "Woll", "bench", "over", None, 0.55)
+    assert condition_met(bench, [], list(page.values()))
+    assert not condition_met(Condition(num, "Woll", "start", "over", None, 0.55), [], list(page.values()))
