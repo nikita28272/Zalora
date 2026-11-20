@@ -111,7 +111,6 @@ async def main() -> int:
         for title, coro in (
             ("Telegram", check_telegram(client)),
             ("Линии (The Odds API)", check_odds(client)),
-            ("Статистика (football-data.org)", check_football_data(client)),
         ):
             try:
                 ok, msg = await coro

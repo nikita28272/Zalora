@@ -18,31 +18,35 @@ class League:
     sport: str = "football"  # football / hockey / basketball
 
 
-ALL_LEAGUES: tuple[League, ...] = (
+# Футбол из бота убран: лиги остались только в справочнике, чтобы открыть старые досье и рассчитать
+# старые футбольные прогнозы. Сканируются, загружаются и показываются только НХЛ и НБА.
+FOOTBALL_LEAGUES: tuple[League, ...] = (
     League("soccer_epl", "PL", "Англия. Премьер-лига"),
     League("soccer_spain_la_liga", "PD", "Испания. Ла Лига"),
     League("soccer_italy_serie_a", "SA", "Италия. Серия А"),
     League("soccer_germany_bundesliga", "BL1", "Германия. Бундеслига"),
     League("soccer_france_ligue_one", "FL1", "Франция. Лига 1"),
     League("soccer_uefa_champs_league", "CL", "Лига чемпионов"),
+)
+ALL_LEAGUES: tuple[League, ...] = (
     League("icehockey_nhl", "NHL", "НХЛ", sport="hockey"),
     League("basketball_nba", "NBA", "НБА", sport="basketball"),
 )
 
 
 def _enabled_leagues() -> tuple[League, ...]:
-    # ENABLED_LEAGUES=PL,NHL,BL1 — какие лиги сканировать и в каком порядке приоритета
-    # (при нехватке кредитов первыми пропускаются последние). Пусто — все лиги.
+    # ENABLED_LEAGUES=NHL,NBA — какие лиги сканировать и в каком порядке приоритета
+    # (при нехватке кредитов первыми пропускаются последние). Пусто — НХЛ и НБА. Коды футбола не действуют.
     raw = os.getenv("ENABLED_LEAGUES", "").strip()
     if not raw:
         return ALL_LEAGUES
     by_code = {lg.fd_code: lg for lg in ALL_LEAGUES}
     codes = [c.strip().upper() for c in raw.split(",") if c.strip()]
-    return tuple(dict.fromkeys(by_code[c] for c in codes if c in by_code))
+    return tuple(dict.fromkeys(by_code[c] for c in codes if c in by_code)) or ALL_LEAGUES
 
 
 LEAGUES: tuple[League, ...] = _enabled_leagues()
-LEAGUES_BY_ODDS_KEY = {lg.odds_key: lg for lg in ALL_LEAGUES}
+LEAGUES_BY_ODDS_KEY = {lg.odds_key: lg for lg in ALL_LEAGUES + FOOTBALL_LEAGUES}
 
 
 # Профили риска финансиста: доля Келли, предохранитель на ставку, всё в игре, один матч, база ставки НБА
@@ -146,7 +150,7 @@ class Settings:
     hot_min_edge: float = field(default_factory=lambda: _float("HOT_MIN_EDGE", 0.03))
     daily_hockey: int = field(default_factory=lambda: _int("DAILY_HOCKEY", 2))
     daily_nba: int = field(default_factory=lambda: _int("DAILY_NBA", 2))
-    daily_football: int = field(default_factory=lambda: _int("DAILY_FOOTBALL", 2))
+    daily_football: int = field(default_factory=lambda: _int("DAILY_FOOTBALL", 0))
     # «игровой день» для набора матчей дня: с этого часа (по TIMEZONE) до него же следующего дня набор не меняется.
     # 13 — после утренних игр НХЛ/НБА (по Новосибирску), до следующей ночи
     daily_rollover_hour: int = field(default_factory=lambda: _int("DAILY_ROLLOVER_HOUR", 13))
@@ -229,8 +233,6 @@ class Settings:
             missing.append("TELEGRAM_BOT_TOKEN")
         if not self.odds_api_key:
             missing.append("ODDS_API_KEY")
-        if not self.football_data_key:
-            missing.append("FOOTBALL_DATA_API_KEY")
         if self.api_mode and not (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")):
             missing.append("ANTHROPIC_API_KEY")
         return missing
