@@ -14,17 +14,6 @@ from bot.config import settings
 from bot.db import DB
 from bot.pipeline import Engine
 from bot.tg import handlers
-from tests.conftest import set_setting
-
-
-@pytest.fixture
-def football_daily():
-    """Механику матчей дня проверяем на футбольном матче из старых тестов: футбол из бота убран
-    (DAILY_FOOTBALL=0), поэтому в этих тестах временно разрешаем его в списке дня."""
-    old = settings.daily_football
-    set_setting("daily_football", 2)
-    yield
-    set_setting("daily_football", old)
 
 OWNER = 777
 
@@ -139,7 +128,7 @@ def _markups(session):
     return [m.reply_markup for m in session.sent if isinstance(m, SendMessage)]
 
 
-def test_dossier_then_top2_verdict_with_buttons_per_pick(football_daily):
+def test_dossier_then_top2_verdict_with_buttons_per_pick():
     from aiogram.methods import EditMessageReplyMarkup
 
     bot, dp, session, db, engine, ctx = _setup_with_match()
@@ -207,7 +196,7 @@ def test_old_dossier_skip_button_still_works():
     assert "статистику" in _texts(session)[-1]
 
 
-def test_morning_message_has_analyze_button(football_daily):
+def test_morning_message_has_analyze_button():
     bot, dp, session, db, engine, ctx = _setup_with_match()
 
     async def cached(max_age_minutes=None):

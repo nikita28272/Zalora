@@ -365,7 +365,7 @@ def daily_keyboard(picks, total: int, report=None) -> InlineKeyboardMarkup | Non
 
 
 async def send_daily(bot: Bot, chat_id: int, engine: Engine, matches, title: str = "") -> None:
-    """Матчи дня (2 хоккея, 2 НБА) с кнопками; полный список — по кнопке."""
+    """Матчи дня (2 хоккея, 2 НБА, 2 футбола) с кнопками; полный список — по кнопке."""
     picks = engine.daily_picks(matches)
     text = (title + "\n\n" if title else "") + fmt.daily_block(
         picks, len(matches), preliminary=getattr(engine, "daily_preliminary", False))
@@ -1322,7 +1322,7 @@ async def run_candidates(bot: Bot, engine: Engine, chat_id: int) -> None:
 
 
 async def run_morning_matches(bot: Bot, engine: Engine, chat_id: int) -> None:
-    """SCAN_TIME: матчи дня к разбору (2 хоккея, 2 НБА) и кнопка «📃 Все матчи»."""
+    """SCAN_TIME: матчи дня к разбору (2 хоккея, 2 НБА, 2 футбола, если есть) и кнопка «📃 Все матчи»."""
     try:
         # линии, загруженные сегодня днём, переиспользуем — кредиты не тратятся
         matches = await engine.load_matches(max_age_minutes=engine.daily_max_age())

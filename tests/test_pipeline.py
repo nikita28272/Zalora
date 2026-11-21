@@ -7,7 +7,7 @@ from bot.agents.llm import AgentError, AgentRun
 from bot.agents.schemas import ALL_OUTCOMES, ChiefOutcome, ChiefVerdict, DevilReport, ExpertsReport, NewsReport, OutcomeView
 from bot.analysis.market import market_view
 from bot.analysis.poisson import ModelOutput, outcome_probs
-from bot.config import FOOTBALL_LEAGUES as LEAGUES
+from bot.config import LEAGUES
 from bot.data.odds import BookOdds, Event
 from bot.data.stats import Result
 from bot.db import DB, month_start_utc

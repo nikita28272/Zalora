@@ -9,7 +9,7 @@ from bot.agents.schemas import ChiefVerdict, DevilReport
 from bot.analysis.bankroll import RiskState, decide_stake, edge, kelly, min_acceptable_odds
 from bot.analysis.market import devig, market_view
 from bot.analysis.poisson import PoissonModel, outcome_probs
-from bot.config import FOOTBALL_LEAGUES as LEAGUES, Settings
+from bot.config import LEAGUES, Settings
 from bot.data.odds import BookOdds, Event
 from bot.data.stats import Result
 from bot.data.teams import best_match, normalize
@@ -382,7 +382,7 @@ def test_hockey_moneyline_ignores_regulation_prices_under_h2h():
 
 def test_model_far_from_market_is_not_a_candidate():
     from bot.analysis.poisson import ModelOutput
-    from bot.config import FOOTBALL_LEAGUES as LEAGUES
+    from bot.config import LEAGUES
     from bot.pipeline import MatchContext
 
     ev = Event("e", LEAGUES[0], NOW + timedelta(days=1), "A", "B",
@@ -693,13 +693,3 @@ def test_signals_board_ranks_what_to_bet_first():
     assert "1️⃣" in text and "ставить первой" in text and "✅ ставить" in text
     assert "🟡 на грани: ставить, только если кэф от 2.02" in text
     assert "⚪ только на бумаге (нужен кэф от 1.81)" in text
-
-
-def test_football_removed_from_active_leagues():
-    from bot.config import ALL_LEAGUES, FOOTBALL_LEAGUES, LEAGUES, LEAGUES_BY_ODDS_KEY, settings as st
-
-    assert {lg.sport for lg in LEAGUES} <= {"hockey", "basketball"}
-    assert {lg.sport for lg in ALL_LEAGUES} == {"hockey", "basketball"}
-    assert st.daily_football == 0
-    # старые футбольные досье и прогнозы по-прежнему открываются и рассчитываются
-    assert all(lg.odds_key in LEAGUES_BY_ODDS_KEY for lg in FOOTBALL_LEAGUES)
